@@ -1,0 +1,19 @@
+[project]
+name = "pouw"
+version = "0.1.0"
+description = "Verifier for proof of useful work on inference, used to check that a GPU's inference matmuls ran on declared weights"
+requires-python = ">=3.12"
+# pearl_mining (the upstream Rust library) is not on PyPI. docker/Dockerfile
+# builds it from a pinned upstream commit; on a GPU box it comes with the upstream vLLM plugin.
+dependencies = [
+  "numpy>=1.26",
+  "safetensors>=0.4",
+  "blake3>=0.4",
+]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
