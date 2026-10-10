@@ -57,6 +57,26 @@ tiles the GPU hashed. With the GPU prover's settings, one tile is 2 rows by 64
 columns of output over the full inner dimension `k`. That's `128 × k`
 multiply-adds, and the tiles cover each output matrix exactly once.
 
+### Attributing proofs to a GPU
+
+Attribution is off by default. To credit each proof to a GPU, start the
+verifier with `--attribute-gpus`. Each prover then sends its GPU's ID in
+`getMiningInfo` and gets its own jobs. The verifier hashes the ID into the
+header's Merkle-root field, so each GPU's noise and tile hashes differ. A
+proof is credited to the ID of the job it used, and the log records it. A
+prover can't move a proof to another GPU, because the ID is part of the
+header that seeded the noise. A request without an ID gets the shared job,
+and its proofs are logged with `gpu_id` set to `null`.
+
+The ID is the UUID the driver reports, and nothing signs it. A dishonest host
+can report any ID, or several IDs for one GPU. Attribution shows which ID
+each proof was made for, not which physical GPU made it.
+
+To send the ID from the upstream plugin, set `MINER_SEND_GPU_ID=true`; see
+`patches/README.md`. From the CPU stand-in, pass `--gpu-id <id>`. Each GPU's
+jobs use their own hash key, so the weight check hashes the declared weights
+once per GPU for each random value.
+
 ## Status
 
 ### On an H100
@@ -85,6 +105,8 @@ ignores.
   Python's global lock for 0.1–0.4 s, freezing inference. Wins also arrive
   faster than proofs get built, and the queued ones were lost when the run
   stopped, so later runs undercounted the work.
+  `patches/0001-release-gil-in-merkle-tree.patch` now makes the proof library
+  release the lock while it hashes. This hasn't been measured on an H100.
 - **vLLM's startup warm-up produces valid proofs.** Before serving requests,
   vLLM runs forward passes on dummy inputs. These went through the noisy
   multiply, and two of three runs produced proofs from them. The verifier
@@ -145,6 +167,9 @@ python -m pouw.cpu_prover --weights data/llama-sample.safetensors \
   --matrix model.layers.0.self_attn.o_proj.weight --proofs 3
 ```
 
+To try attribution, add `--attribute-gpus` to the verifier command and
+`--gpu-id GPU-test-0` to the prover command.
+
 To run on an H100, rent a pod with the `nvidia/cuda:13.0.3-devel-ubuntu24.04`
 image on a host whose driver supports CUDA 13. Copy this repo to
 `/root/pouw` and download the checkpoint to `/root/model`. Then run:
@@ -176,6 +201,8 @@ once: the first run compiles kernels and is slower.
   verifier log and estimates the work they imply.
 - `scripts/gpu/`: pod setup, the end-to-end run, and a benchmark of one noisy
   multiply against a plain one.
+- `patches/`: the changes this repo makes to upstream code, applied at build
+  time, with `patches/README.md` explaining each.
 - `docs/glossary.md`: the terms used here, and where each comes from.
 - `upstream/`: unmodified copies of the upstream files `src/pouw` adapts,
   with a table that pairs each function with its original.

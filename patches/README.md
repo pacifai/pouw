@@ -26,9 +26,10 @@ Python code. Native code can release it while it works on data that Python
 can't touch.
 
 **Why.** The upstream vLLM plugin builds each proof on the CPU inside vLLM's
-engine process. Before this patch, building a tree held the GIL for the whole
-hash: 0.1 s for a 4096 × 4096 int8 matrix and 0.39 s for a 28672 × 4096 one,
-measured on an H100 pod. Every other thread in the engine stopped meanwhile,
+engine process. On an H100 pod, building one proof, including the plugin's
+copies of the matrices, took 0.1 s for a 4096 × 4096 int8 matrix and 0.39 s
+for a 28672 × 4096 one, and it held the GIL nearly the whole time. Every other
+thread in the engine stopped meanwhile,
 so each winning tile froze inference, and a benchmark run took three times as
 long as the plain multiply.
 
@@ -50,3 +51,22 @@ to host memory and into a `bytes` object (`tensor.cpu().numpy().tobytes()`)
 before it calls the library, and that copy still holds the GIL. On an Apple
 M-series laptop, in Docker, it takes 13–43 ms for a 117 MB matrix, about as
 long as the hash. Nobody has measured it on the H100 pod yet.
+
+## 0002-send-gpu-id.patch
+
+**What it changes.** The vLLM plugin can send its GPU's UUID in
+`getMiningInfo`, so a verifier run with `--attribute-gpus` gives each GPU its
+own jobs. It's off by default. To turn it on, set `MINER_SEND_GPU_ID=true`.
+The patch changes three files in `miner/miner-base` and is independent of
+0001.
+
+**How it finds the GPU.** The plugin reads the UUID of the current CUDA
+device on its first GEMM, on the thread that runs the GEMM, and sends it from
+the next job update, within about a second. Proofs from before then use the
+shared job and carry no GPU ID. In a multi-GPU setup, each worker process
+reports its own GPU.
+
+**Limits.** The UUID is whatever the driver reports, and nothing signs it, so
+a dishonest host can fake it. Upstream's own gateway rejects the extra
+parameter, so use this setting only with this repo's verifier. Nobody has run
+this patch on a GPU yet.

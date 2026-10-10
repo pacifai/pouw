@@ -88,6 +88,7 @@ says where each term comes from:
 | Global interpreter lock (GIL) | Python's rule that only one thread runs Python code at a time. | Tool (Python) |
 | Proof-building stall | Inference pausing while the plugin builds a proof in vLLM's process. | This repo |
 | Backlog | Wins waiting for their proofs to be built. | This repo |
+| Patch | A `git diff` against the pinned upstream commit, kept in `patches/` and applied at build time. | Field (software) |
 
 ## GPU identity
 
@@ -98,4 +99,6 @@ says where each term comes from:
 | Attestation, attestation report | A signed statement from the GPU about what it is and what firmware it runs, including a nonce the verifier supplied. | Field; NVIDIA's implementation |
 | Confidential computing (CC) mode | An H100 mode where traffic between a confidential VM and the GPU is encrypted, and the GPU can sign attestation reports. | Tool (NVIDIA); the general term is field |
 | Confidential VM | A VM whose memory the host can't read, using Intel TDX or AMD SEV-SNP. | Field |
-| Attribution | Tying each proof to the GPU that produced it. | This repo |
+| Attribution | Tying each proof to the GPU that produced it. Turned on with `--attribute-gpus`; version 1 trusts the GPU ID the prover reports. | This repo |
+| GPU ID | The string a prover sends in `getMiningInfo` to name its GPU, normally the driver's UUID (`GPU-...`). The verifier hashes it into the header's Merkle-root field. Unsigned. | This repo (`gpu_id`) |
+| Shared job | The job given to provers that send no GPU ID, or to every prover when attribution is off. Its proofs carry no GPU ID. | This repo |

@@ -26,10 +26,14 @@ questions.
 - **Run tests in Docker.** `pearl_mining` isn't published as a package, and
   the image keeps Rust off the host. Run
   `docker run --rm -v "$PWD":/work pouw-local python -m pytest -q`.
-- **Leave the upstream plugin unmodified.** This repo replaces only its gateway:
-  the two JSON-RPC calls `getMiningInfo` and `submitPlainProof`. Anything that
-  needs changes to the upstream kernels or vLLM plugin belongs in a separate,
-  deliberate decision.
+- **Change upstream code only through `patches/`.** This repo replaces
+  upstream's gateway: the two JSON-RPC calls `getMiningInfo` and
+  `submitPlainProof`. Any other change to upstream code is a `git diff`
+  against the pinned commit, saved in `patches/` with a numbered name and
+  explained in `patches/README.md`. `docker/Dockerfile` and
+  `scripts/gpu/setup_pod.sh` apply every patch after checkout. Keep patches
+  small, and don't change the proof format or the verify function. When the
+  pin moves, check that each patch still applies, and rerun the tests.
 - **GPU work costs money.** The upstream kernels need a Hopper GPU (H100 class)
   on a host whose driver supports CUDA 13. Ask before renting one. Arm a hard
   time cap in the pod's boot command, keep the pod ID in `.gpu_state` (ignored

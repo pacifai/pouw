@@ -30,11 +30,15 @@ Attacks, multi-GPU setups, and the KV cache come after this.
 ## To do
 
 - [ ] **Stop proof building from stalling inference.** The plugin builds each
-  proof inside vLLM's engine process while holding Python's global lock.
-  Moving that work to a separate process, or copying `A` and `B` out and
-  hashing them elsewhere, needs a change to the upstream plugin, which
-  `CLAUDE.md` says needs a deliberate decision. Until then, measure the
-  overhead with proofs off, and pick a target that keeps wins rare.
+  proof inside vLLM's engine process, and the proof library held Python's
+  global lock (GIL) the whole time. `patches/0001-release-gil-in-merkle-tree.patch`
+  makes the library release it while it hashes. In Docker on a laptop, a
+  second Python thread now gets 61–67% of its possible turns during a tree
+  build, up from 6% (`tests/test_gil.py`), and proofs are unchanged. The
+  plugin's own copies of each matrix still hold the lock, and on the laptop
+  they take about as long as the hash. Next, rerun `run_e2e.sh` on an H100
+  with proofs on and off, and compare. If copies still stall inference, have
+  the GPU's existing Merkle tree kernel supply the proof paths instead.
   *Done when:* overhead with proofs on is within a few percent of overhead
   with proofs off.
 - [ ] **Measure at more load levels and targets.** So far there's one load:
@@ -43,21 +47,26 @@ Attacks, multi-GPU setups, and the KV cache come after this.
   what share of real serving work gets proven. Compare the estimated work
   with the H100's int8 peak. *Done when:* proven share and overhead exist
   for at least two loads.
-- [ ] **Attribute proofs to a GPU.** Each GPU would get its own jobs, with a
-  hash of the verifier's random value and the GPU's identity in the header,
-  so every proof names the GPU that made it. The IDs a driver reports (UUID,
-  serial number) are unsigned, so a host can fake them. An H100 can sign an
-  attestation report over a verifier-supplied 32-byte nonce with a
-  device-unique key that chains to NVIDIA. According to NVIDIA's open driver
-  source, that works only in confidential computing (CC) mode, which needs a
-  confidential VM (Intel TDX or AMD SEV-SNP), not a RunPod container. Even
-  then, the report shows that a genuine GPU answered after the nonce was
-  issued, not which GPU ran a kernel. Only full CC mode, with the verifier
-  attesting the VM, keeps a host from attesting with one GPU and computing on
-  another. First, on a rented pod, check what the NVML attestation calls
-  return outside CC mode, and find a provider that offers H100s in CC mode.
-  *Done when:* proofs carry a GPU identity, and it's clear which kind of
-  identity a host can fake.
+- [ ] **Attribute proofs to a GPU.** Version 1 runs locally: with
+  `--attribute-gpus`, each GPU ID gets its own jobs, the ID is hashed into
+  the header, and every accepted proof names the ID whose job it used.
+  `patches/0002-send-gpu-id.patch` makes the upstream plugin send its GPU's
+  UUID when `MINER_SEND_GPU_ID=true`. The UUID is unsigned, so a host can
+  fake it or claim several IDs for one GPU. Each new ID also costs the
+  verifier a pass of weight hashing, so a cap on IDs is needed before
+  untrusted provers can connect. It hasn't run on a GPU yet. Next, run it on
+  a pod and check that each worker reports its own UUID. Then replace the
+  reported ID with a signed one. An H100 can sign an attestation report over
+  a verifier-supplied 32-byte nonce with a device-unique key that chains to
+  NVIDIA. According to NVIDIA's open driver source, that works only in
+  confidential computing (CC) mode, which needs a confidential VM (Intel TDX
+  or AMD SEV-SNP), not a RunPod container. Even then, the report shows that
+  a genuine GPU answered after the nonce was issued, not which GPU ran a
+  kernel. Only full CC mode, with the verifier attesting the VM, keeps a host
+  from attesting with one GPU and computing on another. On a pod, check what
+  the NVML attestation calls return outside CC mode, and find a provider
+  that offers H100s in CC mode. *Done when:* proofs carry a GPU identity that
+  a host can't fake, or it's documented which parts a host can still fake.
 - [ ] **Write up the results.**
 
 ## Open questions
