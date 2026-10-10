@@ -43,6 +43,21 @@ Attacks, multi-GPU setups, and the KV cache come after this.
   what share of real serving work gets proven. Compare the estimated work
   with the H100's int8 peak. *Done when:* proven share and overhead exist
   for at least two loads.
+- [ ] **Attribute proofs to a GPU.** Each GPU would get its own jobs, with a
+  hash of the verifier's random value and the GPU's identity in the header,
+  so every proof names the GPU that made it. The IDs a driver reports (UUID,
+  serial number) are unsigned, so a host can fake them. An H100 can sign an
+  attestation report over a verifier-supplied 32-byte nonce with a
+  device-unique key that chains to NVIDIA. According to NVIDIA's open driver
+  source, that works only in confidential computing (CC) mode, which needs a
+  confidential VM (Intel TDX or AMD SEV-SNP), not a RunPod container. Even
+  then, the report shows that a genuine GPU answered after the nonce was
+  issued, not which GPU ran a kernel. Only full CC mode, with the verifier
+  attesting the VM, keeps a host from attesting with one GPU and computing on
+  another. First, on a rented pod, check what the NVML attestation calls
+  return outside CC mode, and find a provider that offers H100s in CC mode.
+  *Done when:* proofs carry a GPU identity, and it's clear which kind of
+  identity a host can fake.
 - [ ] **Write up the results.**
 
 ## Open questions
