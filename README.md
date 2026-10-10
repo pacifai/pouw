@@ -176,5 +176,6 @@ once: the first run compiles kernels and is slower.
   verifier log and estimates the work they imply.
 - `scripts/gpu/`: pod setup, the end-to-end run, and a benchmark of one noisy
   multiply against a plain one.
+- `docs/glossary.md`: the terms used here, and where each comes from.
 - `upstream/`: unmodified copies of the upstream files `src/pouw` adapts,
   with a table that pairs each function with its original.
