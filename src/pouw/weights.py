@@ -23,7 +23,7 @@ from pearl_mining import (
     PeriodicPattern,
     pad_to_chunk_boundary,
 )
-from safetensors.numpy import load_file
+from safetensors import safe_open
 
 # vLLM stores some projections as one fused tensor: rows of the parts stacked in
 # this order. The GEMM, and so the proof, sees the fused tensor.
@@ -82,9 +82,13 @@ class DeclaredWeights:
 
     @classmethod
     def from_safetensors(cls, paths: list[Path], fuse: bool = True) -> DeclaredWeights:
+        # Read only the int8 tensors: NumPy can't hold the checkpoint's bf16 and fp8 ones.
         tensors: dict[str, np.ndarray] = {}
         for path in paths:
-            tensors.update({k: v for k, v in load_file(str(path)).items() if v.dtype == np.int8})
+            with safe_open(str(path), framework="np") as f:
+                for name in f.keys():
+                    if f.get_slice(name).get_dtype() == "I8":
+                        tensors[name] = f.get_tensor(name)
         return cls(fuse_like_vllm(tensors) if fuse else tensors)
 
     def match(self, key: bytes, n: int, k: int, root: bytes) -> str | None:
