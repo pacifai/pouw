@@ -59,7 +59,43 @@ multiply-adds, and the tiles cover each output matrix exactly once.
 
 ## Status
 
-Everything below runs on a laptop. Nothing has run on a GPU yet.
+### On an H100
+
+Measured on 2026-10-10 on one H100 SXM, with upstream's vLLM plugin (vLLM
+0.20.2) serving `pearl-ai/Llama-3.1-8B-Instruct-pearl`, connected to this
+verifier. The load was 200 prompts of 2,048 random tokens with 64 output
+tokens each, sent at once. Logs are in `runs/h100-2026-10-10/`, which git
+ignores.
+
+- **Proofs from real inference pass every check.** All 39 proofs from the
+  first run were accepted, covering 27 different weight matrices. Each
+  matched a checkpoint matrix, so vLLM holds those weights byte for byte as
+  stored, fused the way `pouw.weights` assumes.
+- **The work estimate matches the expected work.** The 39 proofs imply
+  2.04 × 10¹⁵ multiply-adds. The prompt tokens times the proven matrix shapes
+  give 1.93 × 10¹⁵.
+- **The noisy multiply alone costs about a third more time.** With proofs
+  off, the run took 12.1 s against 9.2 s for the plain multiply (median of
+  three and two runs). Measured alone at 8,192 tokens, one noisy multiply
+  takes 2.0 times as long as the plain one for `gate_up_proj`, 3.4 times
+  for `qkv_proj`, and 4.3 times for `o_proj`.
+- **Building proofs stalls inference.** With proofs on, at a 1-in-10⁸ chance
+  per tile, the run took about 28 s, three times the plain multiply. The
+  plugin builds each proof inside vLLM's engine process, and the build holds
+  Python's global lock for 0.1–0.4 s, freezing inference. Wins also arrive
+  faster than proofs get built, and the queued ones were lost when the run
+  stopped, so later runs undercounted the work.
+- **vLLM's startup warm-up produces valid proofs.** Before serving requests,
+  vLLM runs forward passes on dummy inputs. These went through the noisy
+  multiply, and two of three runs produced proofs from them. The verifier
+  accepted them, because the work was real. Two identical warm-up passes
+  also produced the same tile twice, which the verifier rejected as a
+  duplicate.
+- **Small batches earn no proofs.** The plugin runs the noisy multiply only
+  when a batch has at least 1,024 tokens (`min_m` in its `config.yaml`).
+  Decode steps with fewer tokens use the plain multiply.
+
+### On a laptop
 
 - **The verifier works against real proofs.** A CPU stand-in for the prover
   (`pouw.cpu_prover`) builds proofs the way the GPU prover does. The tests show
@@ -109,10 +145,20 @@ python -m pouw.cpu_prover --weights data/llama-sample.safetensors \
   --matrix model.layers.0.self_attn.o_proj.weight --proofs 3
 ```
 
-On a GPU box, start `pouw.verifier` with the full checkpoint's safetensors
-files, then start vLLM with the upstream plugin and its gateway connection
-enabled. The plugin connects to `/tmp/pearlgw.sock` by default, which is where the verifier
-listens.
+To run on an H100, rent a pod with the `nvidia/cuda:13.0.3-devel-ubuntu24.04`
+image on a host whose driver supports CUDA 13. Copy this repo to
+`/root/pouw` and download the checkpoint to `/root/model`. Then run:
+
+```bash
+bash /root/pouw/scripts/gpu/setup_pod.sh       # builds upstream; takes a while
+bash /root/pouw/scripts/gpu/run_e2e.sh         # noisy multiply, proofs on
+NO_MINING=1 bash /root/pouw/scripts/gpu/run_e2e.sh                    # plain multiply
+MINER_SKIP_BLOCK_SUBMISSION=true bash /root/pouw/scripts/gpu/run_e2e.sh   # noisy, proofs off
+```
+
+`run_e2e.sh` starts the verifier on `/tmp/pearlgw.sock`, where the plugin
+connects by default, then vLLM and its benchmark. Run each setup more than
+once: the first run compiles kernels and is slower.
 
 ## Layout
 
@@ -126,5 +172,9 @@ listens.
   options to misbehave.
 - `scripts/fetch_tensors.py`: downloads individual tensors from a Hugging Face
   checkpoint.
+- `scripts/summarize_log.py`: counts accepted and rejected proofs in a
+  verifier log and estimates the work they imply.
+- `scripts/gpu/`: pod setup, the end-to-end run, and a benchmark of one noisy
+  multiply against a plain one.
 - `upstream/`: unmodified copies of the upstream files `src/pouw` adapts,
   with a table that pairs each function with its original.

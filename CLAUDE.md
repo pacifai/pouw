@@ -30,8 +30,11 @@ questions.
   the two JSON-RPC calls `getMiningInfo` and `submitPlainProof`. Anything that
   needs changes to the upstream kernels or vLLM plugin belongs in a separate,
   deliberate decision.
-- **GPU work costs money.** The upstream kernels need a Hopper GPU (H100 class).
-  Ask before renting one.
+- **GPU work costs money.** The upstream kernels need a Hopper GPU (H100 class)
+  on a host whose driver supports CUDA 13. Ask before renting one. Arm a hard
+  time cap in the pod's boot command, keep the pod ID in `.gpu_state` (ignored
+  by git), and delete the pod when the run ends. The first run of each setup
+  compiles kernels, so don't compare timings from it.
 - **Use plain language.** Use the field's terms (GEMM, tile, KV cache,
   Merkle root), and don't coin new ones. Explain a mechanism in words before
   naming it.

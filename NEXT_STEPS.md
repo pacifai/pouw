@@ -15,35 +15,34 @@ Attacks, multi-GPU setups, and the KV cache come after this.
   fresh random values, and runs four checks on each proof. A CPU stand-in for
   the prover produces real proofs, and tests cover each rejection case,
   including on real tensors from the int7 Llama checkpoint.
+- [x] **Upstream plugin running on an H100.** `scripts/gpu/setup_pod.sh`
+  builds it on a CUDA 13 pod. Upstream's `test_pearl_noisy_gemm` passes, and
+  vLLM serves the int7 Llama.
+- [x] **Prover connected to the verifier.** Proofs from real inference arrive
+  and pass every check. Each one's weight matched a checkpoint matrix, which
+  confirms that vLLM holds those weights as stored and fuses them as assumed
+  (27 of the 80 matrices in the first run).
+- [x] **First measurements under load.** `README.md` has the numbers: the
+  noisy multiply alone adds about a third to run time, building proofs
+  stalls inference, and the work estimate matches the expected work when no
+  proofs are lost.
 
 ## To do
 
-- [ ] **Bring up the upstream plugin on an H100.** Its kernels compile only for
-  Hopper (`sm_90a`). Install vLLM and the upstream packages directly on the
-  pod, because RunPod doesn't allow Docker inside a pod. Then run the
-  upstream test `test_pearl_noisy_gemm` and serve `pearl-ai/Llama-3.1-8B-Instruct-pearl`.
-  *Done when:* the test passes and the server answers prompts.
-- [ ] **Confirm that vLLM's weights match the checkpoint.** The weight check
-  assumes vLLM holds each weight exactly as stored, fusing `q/k/v` and
-  `gate/up` by stacking rows in that order. *Done when:* the Merkle root of
-  each fused tensor in GPU memory matches the one `pouw.weights` computes from
-  the checkpoint.
-- [ ] **Connect the prover to the verifier.** Start `pouw.verifier` with the
-  full checkpoint, then start vLLM with the plugin's gateway connection
-  enabled.
-  *Done when:* proofs from real inference arrive and are accepted.
-- [ ] **Measure under load.** Drive the server with vLLM's benchmark script,
-  keeping at least 128 tokens per batch: the noise needs `A` to have at
-  least 128 rows. Record:
-  - tokens per second with the noisy multiply versus upstream's plain int8
-    multiply;
-  - tiles estimated from proofs versus tiles expected from the matrix shapes
-    and token counts;
-  - estimated multiply work versus the H100's int8 peak.
-
-  Repeat at a few targets, because each win copies the full `A` and `B` to
-  CPU memory, and that copying could distort the overhead figure. *Done
-  when:* these numbers exist for at least two load levels.
+- [ ] **Stop proof building from stalling inference.** The plugin builds each
+  proof inside vLLM's engine process while holding Python's global lock.
+  Moving that work to a separate process, or copying `A` and `B` out and
+  hashing them elsewhere, needs a change to the upstream plugin, which
+  `CLAUDE.md` says needs a deliberate decision. Until then, measure the
+  overhead with proofs off, and pick a target that keeps wins rare.
+  *Done when:* overhead with proofs on is within a few percent of overhead
+  with proofs off.
+- [ ] **Measure at more load levels and targets.** So far there's one load:
+  200 prompts of 2,048 tokens, sent at once. Add a decode-heavy load, where
+  most batches have fewer than 1,024 tokens and earn no proofs, to measure
+  what share of real serving work gets proven. Compare the estimated work
+  with the H100's int8 peak. *Done when:* proven share and overhead exist
+  for at least two loads.
 - [ ] **Write up the results.**
 
 ## Open questions
@@ -71,3 +70,11 @@ Attacks, multi-GPU setups, and the KV cache come after this.
 - **fp8 and bf16 layers.** Coverage is set by which layers a checkpoint
   stores as 7-bit integers. A model served in fp8 earns no proofs for its fp8
   layers.
+- **Proofs from warm-up and made-up inputs.** vLLM's startup warm-up runs the
+  noisy multiply on dummy inputs, and those proofs pass every check. The
+  verifier can't tell them apart from proofs of real requests, the same gap
+  as above. For compute accounting this is correct, since the work happened.
+- **Small batches.** The plugin skips the noisy multiply for batches under
+  1,024 tokens, so work done in small batches earns no proofs. Proofs then
+  account for less of the GPU's time, and a verifier comparing proven work
+  with the GPU's capacity needs to know the batch sizes.
