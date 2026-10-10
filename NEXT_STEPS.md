@@ -48,9 +48,22 @@ Attacks, multi-GPU setups, and the KV cache come after this.
 
 ## Open questions
 
-- **Low-rank inputs.** How does the paper stop a prover from choosing `A` or
-  `B` that make the noisy product cheap, such as low-rank matrices? Here `B`
-  is pinned to the declared weights, but `A` is whatever the prover reports.
+- **Low-rank inputs: does upstream's noise match the paper's argument?** The
+  paper (Section 2) covers a prover that picks easy inputs, such as `A = 0`.
+  If only the output were hashed, that would work: the product would reduce
+  to the noise product `E·F`, which is cheap because both are low rank. So
+  the scheme hashes the running sums at every `r`-wide step of the inner
+  dimension instead. Each step multiplies blocks of `A+E` and `B+F` that are
+  uniformly random on their own, whatever `A` and `B` are. A shortcut would
+  have to exploit how the noise is correlated across steps, and the paper
+  conjectures this is as hard as multiplying (Assumption 6.4). That's an
+  assumption, not a proof. The paper's argument assumes noise that's
+  uniformly random of rank `r` over a finite field. Upstream's noise is
+  different: in `noise_generation.py`, one factor is a sparse matrix with one
+  +1 and one −1 per column, the other holds small integers, and arithmetic
+  is on plain integers. A rough count suggests that zero or low-rank `A`
+  still saves nothing per tile, because each step is only `r` wide. Nobody
+  has checked whether the paper's argument carries over to this noise.
 - **Proving real requests.** The proofs show that multiplies with the
   declared weights happened. They don't show that `A` came from real
   requests. That's acceptable when the goal is to account for compute, but
