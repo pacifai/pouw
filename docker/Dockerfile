@@ -18,6 +18,11 @@ RUN git init /opt/upstream \
  && git fetch --depth 1 origin "$UPSTREAM_COMMIT" \
  && git checkout FETCH_HEAD
 
+# Apply this repo's changes to the upstream code. patches/README.md says what
+# each one does.
+COPY patches /opt/patches
+RUN cd /opt/upstream && git apply /opt/patches/*.patch
+
 RUN pip install --no-cache-dir uv maturin \
  && cd /opt/upstream/py-pearl-mining \
  && maturin build --release -o /wheels
