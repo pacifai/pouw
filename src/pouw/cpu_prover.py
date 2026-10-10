@@ -127,6 +127,10 @@ def main() -> None:
     p.add_argument("--tamper-weights", action="store_true", help="change one weight before proving")
     p.add_argument("--replay", action="store_true", help="submit each proof twice")
     p.add_argument("--delay", type=float, default=0.0, help="seconds to wait before submitting")
+    p.add_argument(
+        "--gpu-id",
+        help="GPU ID to send in getMiningInfo; a verifier run with --attribute-gpus issues this ID its own jobs",
+    )
     args = p.parse_args()
 
     Bt = fuse_like_vllm(load_file(str(args.weights)))[args.matrix].copy()
@@ -139,7 +143,7 @@ def main() -> None:
 
     client = RpcClient(args.socket, tcp)
     for i in range(args.proofs):
-        job = client.call("getMiningInfo")
+        job = client.call("getMiningInfo", {"gpu_id": args.gpu_id} if args.gpu_id else None)
         header_bytes = base64.b64decode(job["incomplete_header_bytes"])
         A = random_activations(args.m, Bt.shape[1])
         t0 = time.time()

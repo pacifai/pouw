@@ -108,7 +108,10 @@ class DeclaredWeights:
                 self._forget_old_jobs(keep=cache_key)
         return roots.get(root)
 
-    def _forget_old_jobs(self, keep: tuple[bytes, int, int], limit: int = 64) -> None:
+    # Each entry is one job and matrix shape, holding one 32-byte root per
+    # matrix. With GPU attribution on, every GPU has its own jobs, so the
+    # limit leaves room for many GPUs, each with a few live jobs and shapes.
+    def _forget_old_jobs(self, keep: tuple[bytes, int, int], limit: int = 1024) -> None:
         while len(self._roots) > limit:
             oldest = next(iter(self._roots))
             if oldest == keep:

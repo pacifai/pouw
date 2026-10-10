@@ -14,6 +14,13 @@ must pass four checks before it counts:
    opened rows and the noise, hashes below the target.
 3. Its weight matrix is one of the declared model's matrices.
 4. It hasn't been submitted before.
+
+With --attribute-gpus, getMiningInfo accepts {"gpu_id": "<id>"} and each GPU
+ID gets its own job. A proof is credited to the GPU ID of the job it was made
+under, found by its header bytes. The prover can't relabel a proof, because
+the ID is hashed into the header that seeded the noise. A request without a
+gpu_id gets the shared job, and its proofs carry gpu_id None. The ID is
+self-reported and unsigned, so a dishonest host can fake it.
 """
 
 from __future__ import annotations
@@ -29,7 +36,7 @@ from pathlib import Path
 
 from pearl_mining import IncompleteBlockHeader, PlainProof, verify_plain_proof_for_cert_version
 
-from .jobs import JobIssuer, nbits_for_win_probability, win_probability
+from .jobs import MAX_GPU_ID_LEN, Job, JobIssuer, nbits_for_win_probability, win_probability
 from .weights import DeclaredWeights, config_from_indices, job_key
 
 
@@ -48,14 +55,31 @@ class Verdict:
     # accepted proofs estimates how many tiles the GPU computed.
     win_probability: float | None = None
     job_age_s: float | None = None
+    # The GPU ID the proof's job was issued for. None when attribution is off
+    # or the prover sent no ID. Self-reported, so a host can fake it.
+    gpu_id: str | None = None
 
 
 class Verifier:
-    def __init__(self, issuer: JobIssuer, weights: DeclaredWeights):
+    def __init__(self, issuer: JobIssuer, weights: DeclaredWeights, attribute_gpus: bool = False):
         self.issuer = issuer
         self.weights = weights
+        self.attribute_gpus = attribute_gpus
         self._seen: set[tuple] = set()
         self._lock = threading.Lock()
+
+    def issue(self, params: dict | None = None, now: float | None = None) -> Job:
+        """The job to answer a getMiningInfo request with.
+
+        With attribution off, every request gets the shared job and params are
+        ignored. With it on, a request carrying a gpu_id gets that GPU's job.
+        """
+        gpu_id = None
+        if self.attribute_gpus and isinstance(params, dict):
+            gpu_id = params.get("gpu_id")
+            if gpu_id is not None and not (isinstance(gpu_id, str) and 0 < len(gpu_id) <= MAX_GPU_ID_LEN):
+                raise ValueError(f"gpu_id must be a string of 1 to {MAX_GPU_ID_LEN} characters")
+        return self.issuer.current(now, gpu_id)
 
     def check(self, plain_proof_b64: str, mining_job: dict, now: float | None = None) -> Verdict:
         now = time.time() if now is None else now
@@ -64,7 +88,7 @@ class Verifier:
         job = self.issuer.lookup(header_bytes)
         if job is None:
             return Verdict(False, "unknown job: not issued by this verifier")
-        v = Verdict(False, "", job_id=job.job_id, job_age_s=now - job.issued_at)
+        v = Verdict(False, "", job_id=job.job_id, job_age_s=now - job.issued_at, gpu_id=job.gpu_id)
         if mining_job.get("target") != job.target or mining_job.get("cert_version") != job.cert_version:
             v.reason = "job fields differ from what was issued"
             return v
@@ -134,7 +158,7 @@ class _Server:
 
     def dispatch(self, method: str, params: dict) -> dict:
         if method == "getMiningInfo":
-            return self.verifier.issuer.current().to_dict()
+            return self.verifier.issue(params).to_dict()
         if method == "submitPlainProof":
             verdict = self.verifier.check(params["plain_proof"], params["mining_job"])
             self._log(verdict)
@@ -177,6 +201,12 @@ def main() -> None:
     p.add_argument("--interval", type=float, default=5.0, help="seconds between fresh random values")
     p.add_argument("--max-age", type=float, default=15.0, help="oldest job a proof may use, in seconds")
     p.add_argument("--log", type=Path, help="append one JSON line per submission here")
+    p.add_argument(
+        "--attribute-gpus",
+        action="store_true",
+        help="give each GPU ID sent in getMiningInfo its own job, and record it on each proof "
+        "(the ID is self-reported and unsigned, so a host can fake it)",
+    )
     args = p.parse_args()
 
     if args.log:
@@ -184,8 +214,9 @@ def main() -> None:
     weights = DeclaredWeights.from_safetensors(args.weights)
     nbits = nbits_for_win_probability(args.win_probability, args.k)
     issuer = JobIssuer(nbits=nbits, interval_s=args.interval, max_age_s=args.max_age)
-    verifier = Verifier(issuer, weights)
-    print(f"declared matrices: {len(weights.tensors)}; nbits={nbits:#010x}", flush=True)
+    verifier = Verifier(issuer, weights, attribute_gpus=args.attribute_gpus)
+    attribution = "on" if args.attribute_gpus else "off"
+    print(f"declared matrices: {len(weights.tensors)}; nbits={nbits:#010x}; GPU attribution {attribution}", flush=True)
 
     if args.tcp:
         host, port = args.tcp.rsplit(":", 1)

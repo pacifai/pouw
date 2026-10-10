@@ -2,7 +2,18 @@
 
 The prover expects a block header and a difficulty target. The random value
 goes in the header's previous-block-hash field, so every noise seed and tile
-hash the GPU produces depends on it. The other header fields are fixed filler.
+hash the GPU produces depends on it.
+
+With GPU attribution on, each GPU gets its own job: the header's Merkle-root
+field holds a hash of the GPU's ID instead of zeros. The noise seeds and tile
+hashes then differ per GPU, so a proof made under one GPU's job can't pass as
+another's. The other header fields are fixed filler.
+
+The GPU ID is whatever the prover reports, such as the UUID the driver gives.
+Nothing signs it, so a dishonest host can claim any ID, or several IDs for
+one GPU. Attribution therefore says which ID a proof was made for, not which
+physical GPU made it. To bind an ID to real hardware, a later version can
+replace the reported ID with a signed attestation; see NEXT_STEPS.md.
 """
 
 from __future__ import annotations
@@ -13,6 +24,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 
+from blake3 import blake3
 from pearl_mining import (
     IncompleteBlockHeader,
     MiningConfiguration,
@@ -29,6 +41,12 @@ CERT_VERSION = 3
 NOISE_RANK = 128
 ROWS_PATTERN = [0, 8]
 COLS_PATTERN = [c + d for c in range(0, 256, 8) for d in (0, 1)]
+
+# Prefix for hashing a GPU ID into a header, so the hash can't collide with
+# any other use of BLAKE3 in the proof format.
+GPU_ID_DOMAIN = b"pouw gpu id"
+# Longest GPU ID the verifier accepts. A UUID string is 40 characters.
+MAX_GPU_ID_LEN = 128
 
 
 def bits_to_target(bits: int) -> int:
@@ -50,6 +68,13 @@ def target_to_bits(target: int) -> int:
         mantissa >>= 8
         size += 1
     return (size << 24) | mantissa
+
+
+def gpu_id_hash(gpu_id: str | None) -> bytes:
+    """The 32 bytes for the header's Merkle-root field: zeros, or a hash of the GPU ID."""
+    if gpu_id is None:
+        return bytes(32)
+    return blake3(GPU_ID_DOMAIN + gpu_id.encode("utf-8")).digest()
 
 
 def gpu_proof_config(k: int) -> MiningConfiguration:
@@ -90,6 +115,9 @@ class Job:
     nbits: int
     issued_at: float
     cert_version: int = CERT_VERSION
+    # The GPU this job was issued for, as the prover reported it. None for the
+    # shared job. Self-reported and unsigned: see the module docstring.
+    gpu_id: str | None = None
 
     @property
     def target(self) -> int:
@@ -109,16 +137,16 @@ class Job:
         }
 
 
-def new_job(nbits: int, now: float | None = None) -> Job:
+def new_job(nbits: int, now: float | None = None, gpu_id: str | None = None) -> Job:
     now = time.time() if now is None else now
     header = IncompleteBlockHeader(
         version=1,
         prev_block=os.urandom(32),
-        merkle_root=bytes(32),
+        merkle_root=gpu_id_hash(gpu_id),
         timestamp=int(now),
         nbits=nbits,
     )
-    return Job(header_bytes=bytes(header.to_bytes()), nbits=nbits, issued_at=now)
+    return Job(header_bytes=bytes(header.to_bytes()), nbits=nbits, issued_at=now, gpu_id=gpu_id)
 
 
 @dataclass
@@ -127,23 +155,29 @@ class JobIssuer:
 
     A proof counts only if its job was issued here and is younger than
     `max_age_s`. That bounds when the work behind the proof could have happened.
+
+    Each GPU ID has its own current job, refreshed on the same interval. The
+    ID None is the shared job, used when attribution is off or a prover sends
+    no ID.
     """
 
     nbits: int
     interval_s: float = 5.0
     max_age_s: float = 15.0
     _jobs: dict[bytes, Job] = field(default_factory=dict)
-    _current: Job | None = None
+    _current: dict[str | None, Job] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
-    def current(self, now: float | None = None) -> Job:
+    def current(self, now: float | None = None, gpu_id: str | None = None) -> Job:
         now = time.time() if now is None else now
         with self._lock:
-            if self._current is None or now - self._current.issued_at >= self.interval_s:
-                self._current = new_job(self.nbits, now)
-                self._jobs[self._current.header_bytes] = self._current
+            job = self._current.get(gpu_id)
+            if job is None or now - job.issued_at >= self.interval_s:
+                job = new_job(self.nbits, now, gpu_id)
+                self._current[gpu_id] = job
+                self._jobs[job.header_bytes] = job
                 self._forget_old(now)
-            return self._current
+            return job
 
     def lookup(self, header_bytes: bytes) -> Job | None:
         with self._lock:
@@ -152,3 +186,5 @@ class JobIssuer:
     def _forget_old(self, now: float) -> None:
         for key in [k for k, j in self._jobs.items() if now - j.issued_at > 4 * self.max_age_s]:
             del self._jobs[key]
+        for gpu_id in [g for g, j in self._current.items() if now - j.issued_at > 4 * self.max_age_s]:
+            del self._current[gpu_id]
