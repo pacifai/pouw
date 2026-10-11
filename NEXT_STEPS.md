@@ -67,6 +67,28 @@ Attacks, multi-GPU setups, and the KV cache come after this.
   the NVML attestation calls return outside CC mode, and find a provider
   that offers H100s in CC mode. *Done when:* proofs carry a GPU identity that
   a host can't fake, or it's documented which parts a host can still fake.
+
+  Hashing the ID into the job stays useful once the ID is signed, because
+  attestation and proofs show different things. Attestation shows a genuine
+  GPU answered, but not how much work it did. Proofs show how much work was
+  done, but not where. The ID in the job makes the work specific to one ID:
+  each ID gets different noise, so a proof counts for exactly one ID, and
+  claiming 10 IDs takes 10 times the work. With a signed ID, that gives
+  per-GPU numbers, which are useful for three things:
+  - **Bounding other work per GPU.** Total proven work only bounds the
+    whole cluster. Per-GPU proven work, compared with each GPU's peak rate,
+    bounds how much time each GPU had left for anything else.
+  - **Checking a registry.** A declared GPU that produces no proofs is idle
+    or doing something else.
+  - **Location.** The ID gives no location itself. A separate delay-based
+    check can: verifier machines at known places send nonces, the GPU signs
+    each one, and the round-trip time bounds its distance (about 100 km per
+    millisecond in fiber). The ID in the job then ties the proven work to
+    that located GPU. Proofs take seconds and vary by milliseconds, so their
+    own timing can't do this. The check fails against a relay, where a local
+    GPU answers the pings and remote GPUs compute that ID's jobs, unless
+    attested CC software rules out forwarding. A stolen device key, as in
+    TEE.fail-style attacks, defeats it entirely.
 - [ ] **Write up the results.**
 
 ## Open questions
