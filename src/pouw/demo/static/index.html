@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PoUW demo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main class="wrap">
+
+<header class="panel header">
+  <h1>PoUW demo</h1>
+  <label class="run-select"><span class="visually-hidden">Run</span><select id="run-select"></select></label>
+  <div class="meta mono">
+    <span id="run-label"></span>
+    <span>Llama 3.1 8B Instruct</span>
+    <span>H100 80GB</span>
+  </div>
+  <div class="progress" id="progress" aria-label="Replay progress">
+    <div class="bar"><div id="progress-fill"></div></div>
+    <span id="progress-text" class="mono">0 / 0 s</span>
+  </div>
+  <div class="actions">
+    <button id="start" class="primary" type="button">Start</button>
+    <button id="reset" type="button">Reset</button>
+  </div>
+</header>
+
+<nav class="tabs" aria-label="Views">
+  <button type="button" class="tab active" data-view="dashboard">Dashboard</button>
+  <button type="button" class="tab" data-view="limits">Limitations, assumptions, and future work</button>
+</nav>
+
+<div id="view-dashboard">
+
+<section class="totals" aria-label="Totals">
+  <div class="panel stat"><div class="label">Tokens</div><div class="value mono" id="t-tokens">0</div></div>
+  <div class="panel stat"><div class="label">Accepted proofs</div><div class="value mono accepted" id="t-accepted">0</div></div>
+  <div class="panel stat"><div class="label">Rejected proofs</div><div class="value mono rejected" id="t-rejected">0</div><div class="sub mono" id="t-rejected-sub"></div></div>
+  <div class="panel stat"><div class="label">Estimated proven work (MACs)</div><div class="value mono" id="t-macs">0</div></div>
+  <div class="panel stat"><div class="label">Overhead of the noisy multiply</div><div class="value mono" id="t-overhead">n/a</div><div class="sub mono" id="t-overhead-sub"></div></div>
+</section>
+
+<div class="row">
+  <section class="panel grow-1" aria-label="Inference throughput">
+    <h2>Inference throughput</h2>
+    <svg id="throughput" class="chart" viewBox="0 0 600 180" preserveAspectRatio="none" role="img" aria-label="Tokens per second by multiply used"></svg>
+    <div class="axis mono"><span>tokens/s, last 120 s</span><span id="tps-now"></span></div>
+    <svg id="batches" class="strip" viewBox="0 0 640 64" preserveAspectRatio="none" role="img" aria-label="Batch size per forward pass"></svg>
+    <div class="axis mono"><span>batch size (m) per forward pass</span></div>
+    <div class="legend">
+      <span><i class="sw noisy" aria-hidden="true"></i>Noisy GEMM (m ≥ 1,024)</span>
+      <span><i class="sw plain" aria-hidden="true"></i>Baseline GEMM (m &lt; 1,024)</span>
+    </div>
+    <div class="share mono" id="share"></div>
+  </section>
+
+  <section class="panel grow-2" aria-label="Verifier log">
+    <h2>Verifier log</h2>
+    <div class="table-box">
+      <table class="log mono">
+        <thead><tr><th>Time</th><th>Source</th><th>GPU ID</th><th>Weight matrix</th><th>m × k</th><th>Result</th><th class="delay-col">Delay</th><th>Reason</th></tr></thead>
+        <tbody id="log"></tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<section class="panel" aria-label="Attacks">
+  <h2>Attacks</h2>
+  <h3 class="rejected">Detected · 6</h3>
+  <div class="cards" id="detected"></div>
+  <h3 class="accepted">Undetected · 4</h3>
+  <div class="cards" id="undetected"></div>
+</section>
+
+<section class="panel" aria-label="Per-GPU attribution">
+  <div class="title-row"><h2>Per-GPU attribution</h2><span class="tag mono">self-reported UUIDs, unsigned</span></div>
+  <div class="table-box">
+    <table class="mono gpu-table">
+      <thead><tr><th>GPU ID</th><th>Proofs</th><th>Estimated proven work (MACs)</th><th>Proofs came from</th></tr></thead>
+      <tbody id="per-gpu"></tbody>
+    </table>
+  </div>
+</section>
+
+</div>
+
+<div id="view-limits" hidden>
+  <section class="panel">
+    <h2>Limitations</h2>
+    <div class="cards two">
+      <div class="card"><div class="card-head"><h3>Small inner dimension (k)</h3><span class="tag research mono">needs research</span></div><p>Attention multiplies over the head size, 128 values. The noise only pays off when k is at least 16 times the noise rank: 2,048 here.</p></div>
+      <div class="card"><div class="card-head"><h3>KV cache commitment</h3><span class="tag research mono">needs research</span></div><p>Attention reads keys and values cached from earlier tokens. They change every step, and nothing commits to them.</p></div>
+      <div class="card"><div class="card-head"><h3>Fused attention kernels (FlashAttention)</h3><span class="tag research mono">needs research</span></div><p>Both attention multiplies and the softmax run in one kernel that never stores the full product. Noise and hashing would have to move inside it.</p></div>
+      <div class="card"><div class="card-head"><h3>Floating-point GEMMs</h3><span class="tag research mono">needs research</span></div><p>The verifier recomputes a tile and must get the same bits. Integer math is exact; fp8 and bf16 results depend on rounding order. In this checkpoint, every down_proj, q/k/v_proj in layers 0–15, and lm_head are fp8 or bf16.</p></div>
+      <div class="card"><div class="card-head"><h3>Small batches (m &lt; 1,024)</h3><span class="tag mono">measured</span></div><p>Batches under 1,024 tokens use the baseline GEMM. In a decode-heavy H100 run (256-token prompts, 512-token answers), only 40% of int7 GEMM work used the noisy GEMM.</p></div>
+      <div class="card"><div class="card-head"><h3>Non-GEMM operations</h3><span class="tag mono">by design</span></div><p>Softmax, normalization, activations, and embedding lookups aren't matrix multiplies, and they're a small share of the compute.</p></div>
+    </div>
+  </section>
+  <section class="panel">
+    <h2>Assumptions</h2>
+    <ol class="assumptions">
+      <li><b>Hardness of noisy GEMM (the paper's Assumption 6.4).</b> Producing the hashed running sums of the noised matrices costs as much as the full multiply, whatever the inputs. The paper states this as a conjecture.</li>
+      <li><b>Noise distribution.</b> The paper assumes uniformly random noise over a finite field. Upstream uses sparse and small-integer noise on plain integers. Nobody has checked that the argument carries over.</li>
+      <li><b>BLAKE3 as a random oracle.</b> The only way to find a tile whose hash falls below the target is to compute tiles and try them.</li>
+      <li><b>Unpredictable challenges.</b> Each job carries 32 random bytes the prover can't predict, and jobs expire after 15 s.</li>
+      <li><b>Declared model.</b> The verifier holds the checkpoint the prover should run. Proofs show its weights were used, not that it's the only model on the GPU.</li>
+      <li><b>Known unproven work.</b> To read proven work as a share of capacity, the verifier needs the GPU's peak rate and an estimate of the work that earns no proofs.</li>
+    </ol>
+  </section>
+  <section class="panel">
+    <h2>Future work</h2>
+    <div class="cards two">
+      <div class="card"><h3>Hardware attestation (H100 CC mode)</h3><p>Issue a GPU's job only after it signs the verifier's nonce with its device key. On this run's pod, CC mode was off, and the driver's certificate and attestation report calls both failed.</p></div>
+      <div class="card"><h3>Delay-based location verification</h3><p>Landmarks time signed nonce replies to bound a GPU's distance. The GPU ID in the job ties proven work to that GPU. Relays and extracted device keys defeat it.</p></div>
+      <div class="card"><h3>Mixture of experts (MoE)</h3><p>Upstream can prove expert layers, but this verifier rejects those proofs. It needs to match each proof to an expert's weights.</p></div>
+      <div class="card"><h3>Tensor parallelism</h3><p>When a model is split across GPUs, each holds part of every weight matrix. The verifier must match proofs to those parts.</p></div>
+      <div class="card"><h3>GPU-side Merkle proofs</h3><p>Take proof paths from the Merkle trees the GPU already builds, so proofs don't pause inference.</p></div>
+      <div class="card"><h3>Sybil resistance for GPU IDs</h3><p>Each new ID costs the verifier a pass of weight hashing, so it needs a cap before untrusted provers connect.</p></div>
+    </div>
+  </section>
+</div>
+
+</main>
+
+<dialog id="detail" aria-labelledby="detail-title">
+  <div class="dialog-head">
+    <h2 id="detail-title"></h2>
+    <span id="detail-result" class="mono"></span>
+    <button type="button" id="detail-close" aria-label="Close">
+      <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+    </button>
+  </div>
+  <div id="detail-meta" class="mono detail-meta"></div>
+  <table class="mono changes" id="detail-changes-table">
+    <thead><tr><th>Field</th><th>Original</th><th>Submitted</th></tr></thead>
+    <tbody id="detail-changes"></tbody>
+  </table>
+  <h3>Verification pipeline</h3>
+  <ol id="detail-checks" class="checks"></ol>
+  <div id="detail-reason" class="mono reason"></div>
+</dialog>
+
+<script src="app.js"></script>
+</body>
+</html>
