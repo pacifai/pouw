@@ -155,11 +155,15 @@ class _Handler(socketserver.StreamRequestHandler):
 class _Server:
     verifier: Verifier
     log_path: Path | None
+    # A recording.Recorder, or None. Set after construction.
+    recorder = None
 
     def dispatch(self, method: str, params: dict) -> dict:
         if method == "getMiningInfo":
             return self.verifier.issue(params).to_dict()
         if method == "submitPlainProof":
+            if self.recorder is not None:
+                self.recorder.submission(time.time(), params)
             verdict = self.verifier.check(params["plain_proof"], params["mining_job"])
             self._log(verdict)
             return {"accepted": verdict.accepted, "reason": verdict.reason}
@@ -202,6 +206,11 @@ def main() -> None:
     p.add_argument("--max-age", type=float, default=15.0, help="oldest job a proof may use, in seconds")
     p.add_argument("--log", type=Path, help="append one JSON line per submission here")
     p.add_argument(
+        "--record",
+        type=Path,
+        help="append every issued job and every submitted proof here, so the session can be replayed",
+    )
+    p.add_argument(
         "--attribute-gpus",
         action="store_true",
         help="give each GPU ID sent in getMiningInfo its own job, and record it on each proof "
@@ -214,6 +223,24 @@ def main() -> None:
     weights = DeclaredWeights.from_safetensors(args.weights)
     nbits = nbits_for_win_probability(args.win_probability, args.k)
     issuer = JobIssuer(nbits=nbits, interval_s=args.interval, max_age_s=args.max_age)
+    recorder = None
+    if args.record:
+        from .recording import Recorder
+
+        args.record.parent.mkdir(parents=True, exist_ok=True)
+        recorder = Recorder(args.record)
+        recorder._write(
+            {
+                "type": "settings",
+                "nbits": nbits,
+                "interval_s": args.interval,
+                "max_age_s": args.max_age,
+                "attribute_gpus": args.attribute_gpus,
+                "win_probability": args.win_probability,
+                "k": args.k,
+            }
+        )
+        issuer.on_new_job = recorder.job
     verifier = Verifier(issuer, weights, attribute_gpus=args.attribute_gpus)
     attribution = "on" if args.attribute_gpus else "off"
     print(f"declared matrices: {len(weights.tensors)}; nbits={nbits:#010x}; GPU attribution {attribution}", flush=True)
@@ -223,6 +250,7 @@ def main() -> None:
         server: _Server = TcpVerifierServer(host, int(port), verifier, args.log)
     else:
         server = UnixVerifierServer(args.socket, verifier, args.log)
+    server.recorder = recorder
     print(f"listening on {args.tcp or args.socket}", flush=True)
     server.serve_forever()  # type: ignore[attr-defined]
 
