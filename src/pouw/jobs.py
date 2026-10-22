@@ -23,6 +23,7 @@ import os
 import threading
 import time
 from dataclasses import dataclass, field
+from typing import Callable
 
 from blake3 import blake3
 from pearl_mining import (
@@ -164,6 +165,10 @@ class JobIssuer:
     nbits: int
     interval_s: float = 5.0
     max_age_s: float = 15.0
+    # Called with each new job, for example to record it.
+    on_new_job: Callable[[Job], None] | None = None
+    # Drop jobs older than 4 * max_age_s. A replay of a recorded session keeps them all.
+    forget_old: bool = True
     _jobs: dict[bytes, Job] = field(default_factory=dict)
     _current: dict[str | None, Job] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock)
@@ -176,7 +181,10 @@ class JobIssuer:
                 job = new_job(self.nbits, now, gpu_id)
                 self._current[gpu_id] = job
                 self._jobs[job.header_bytes] = job
-                self._forget_old(now)
+                if self.forget_old:
+                    self._forget_old(now)
+                if self.on_new_job is not None:
+                    self.on_new_job(job)
             return job
 
     def lookup(self, header_bytes: bytes) -> Job | None:

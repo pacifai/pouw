@@ -70,3 +70,17 @@ reports its own GPU.
 a dishonest host can fake it. Upstream's own gateway rejects the extra
 parameter, so use this setting only with this repo's verifier. Nobody has run
 this patch on a GPU yet.
+
+## 0003-log-gemm-shapes.patch
+
+**What it changes.** The vLLM plugin's `should_use_noisy_gemm` can log every
+decision it makes. When `MINER_LOG_GEMM_SHAPES` names a file, it appends one
+JSON line per int7 GEMM: the time, `m`, `n`, `k`, and whether the noisy
+multiply ran. It buffers lines and writes them 4,096 at a time. Without the
+variable, it does nothing.
+
+**Why.** Proofs only show the batches that used the noisy multiply. To report
+what share of int7 GEMM work earned proofs, and to draw each batch in the
+demo, you also need the batches that fell under `min_m` and used the plain
+multiply. Leave it off for timing runs, since it adds a Python call and some
+file writes per GEMM.

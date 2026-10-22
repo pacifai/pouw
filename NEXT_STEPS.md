@@ -26,6 +26,9 @@ Attacks, multi-GPU setups, and the KV cache come after this.
   noisy multiply alone adds about a third to run time, building proofs
   stalls inference, and the work estimate matches the expected work when no
   proofs are lost.
+- [x] **Demo.** `pouw.demo` replays the recorded H100 run through the
+  verifier and runs six attacks it detects and two it doesn't. See the Demo
+  section of `README.md`.
 
 ## To do
 
@@ -36,17 +39,23 @@ Attacks, multi-GPU setups, and the KV cache come after this.
   second Python thread now gets 61–67% of its possible turns during a tree
   build, up from 6% (`tests/test_gil.py`), and proofs are unchanged. The
   plugin's own copies of each matrix still hold the lock, and on the laptop
-  they take about as long as the hash. Next, rerun `run_e2e.sh` on an H100
-  with proofs on and off, and compare. If copies still stall inference, have
-  the GPU's existing Merkle tree kernel supply the proof paths instead.
-  *Done when:* overhead with proofs on is within a few percent of overhead
-  with proofs off.
-- [ ] **Measure at more load levels and targets.** So far there's one load:
-  200 prompts of 2,048 tokens, sent at once. Add a decode-heavy load, where
-  most batches have fewer than 1,024 tokens and earn no proofs, to measure
-  what share of real serving work gets proven. Compare the estimated work
-  with the H100's int8 peak. *Done when:* proven share and overhead exist
-  for at least two loads.
+  they take about as long as the hash. On one H100, alternating the two
+  libraries, proofs on took 22.4 s with the patch and 28.5 s without it,
+  against 12.1 s with proofs off (medians of three runs). With a target
+  nothing can win, proofs on took 12.4 s, so the per-GEMM callbacks cost
+  almost nothing: the remaining cost is handling wins. Next, in order of
+  effort: keep one host copy of the weights so a win copies only the
+  activations, build proofs in a separate process, and have the GPU's
+  existing Merkle tree kernel supply the proof paths. The win rate is also a
+  lever: fewer wins cost less but make the work estimate noisier. *Done
+  when:* overhead with proofs on is within a few percent of overhead with
+  proofs off.
+- [ ] **Measure at more load levels and targets.** Proven share now exists
+  for two loads: 97% of int7 GEMM work for 2,048-token prompts at 3 per
+  second, and 40% for 256-token prompts with 512-token answers. Next,
+  measure overhead for the decode-heavy load, and compare the estimated
+  work with the H100's int8 peak. *Done when:* proven share and overhead
+  exist for at least two loads.
 - [ ] **Attribute proofs to a GPU.** Version 1 runs locally: with
   `--attribute-gpus`, each GPU ID gets its own jobs, the ID is hashed into
   the header, and every accepted proof names the ID whose job it used.
@@ -54,8 +63,8 @@ Attacks, multi-GPU setups, and the KV cache come after this.
   UUID when `MINER_SEND_GPU_ID=true`. The UUID is unsigned, so a host can
   fake it or claim several IDs for one GPU. Each new ID also costs the
   verifier a pass of weight hashing, so a cap on IDs is needed before
-  untrusted provers can connect. It hasn't run on a GPU yet. Next, run it on
-  a pod and check that each worker reports its own UUID. Then replace the
+  untrusted provers can connect. On an H100 on 2026-10-11, the plugin sent
+  its GPU's UUID and every proof was credited to it. Next, replace the
   reported ID with a signed one. An H100 can sign an attestation report over
   a verifier-supplied 32-byte nonce with a device-unique key that chains to
   NVIDIA. According to NVIDIA's open driver source, that works only in
@@ -63,9 +72,10 @@ Attacks, multi-GPU setups, and the KV cache come after this.
   or AMD SEV-SNP), not a RunPod container. Even then, the report shows that
   a genuine GPU answered after the nonce was issued, not which GPU ran a
   kernel. Only full CC mode, with the verifier attesting the VM, keeps a host
-  from attesting with one GPU and computing on another. On a pod, check what
-  the NVML attestation calls return outside CC mode, and find a provider
-  that offers H100s in CC mode. *Done when:* proofs carry a GPU identity that
+  from attesting with one GPU and computing on another. On a RunPod H100
+  outside CC mode, NVML's certificate and attestation report calls both
+  failed (`scripts/gpu/probe_attestation.py`). Next, find a provider that
+  offers H100s in CC mode. *Done when:* proofs carry a GPU identity that
   a host can't fake, or it's documented which parts a host can still fake.
 
   Hashing the ID into the job stays useful once the ID is signed, because
@@ -90,6 +100,18 @@ Attacks, multi-GPU setups, and the KV cache come after this.
     attested CC software rules out forwarding. A stolen device key, as in
     TEE.fail-style attacks, defeats it entirely.
 - [ ] **Write up the results.**
+
+- [ ] **Keep the verifier up with the prover.** The verifier hashes every
+  declared weight matrix again for each new job, about 2 s per job in
+  Docker on a laptop. On an H100 pod with 6.8 CPU cores, verdicts lagged
+  proofs by up to 20 s. Because the plugin waits for each verdict before
+  sending its next proof, the lag backs up the plugin's proof queue, and in
+  one recorded run 28 honest proofs arrived stale. Every GPU ID adds jobs,
+  so the cost grows with the number of GPUs. Options: compare the opened
+  weight columns with the declared matrix instead of rehashing the whole
+  model per job, with full checks on a sample of jobs; hash weights for the
+  next job before it's issued; or reply to the prover before checking. *Done
+  when:* verdicts keep up with a full-speed H100.
 
 ## Open questions
 

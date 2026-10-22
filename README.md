@@ -106,7 +106,7 @@ ignores.
   faster than proofs get built, and the queued ones were lost when the run
   stopped, so later runs undercounted the work.
   `patches/0001-release-gil-in-merkle-tree.patch` now makes the proof library
-  release the lock while it hashes. This hasn't been measured on an H100.
+  release the lock while it hashes. The second session below measures it.
 - **vLLM's startup warm-up produces valid proofs.** Before serving requests,
   vLLM runs forward passes on dummy inputs. These went through the noisy
   multiply, and two of three runs produced proofs from them. The verifier
@@ -116,6 +116,92 @@ ignores.
 - **Small batches earn no proofs.** The plugin runs the noisy multiply only
   when a batch has at least 1,024 tokens (`min_m` in its `config.yaml`).
   Decode steps with fewer tokens use the plain multiply.
+
+### Second H100 session
+
+Measured on 2026-10-11 on another H100 SXM pod, with all three patches and
+the same model. Logs are in `runs/h100-2026-10-11/`, which git ignores, and
+`scripts/gpu/demo_session.sh` reproduces them. This pod ran the same load
+about twice as slowly as the first one, so compare its runs with each other,
+not with the first session's.
+
+- **This pod's timings were misleading.** On the same load as above, the
+  medians of three runs were 21.0 s for the plain multiply, 24.1 s with
+  proofs off, and 31.6 s with proofs on. That made proofs look cheap, but
+  the third session below, on a faster pod, refutes it: this slow host
+  shrank every GPU-side cost as a share of run time.
+- **Attribution works with the GPU's UUID.** With `MINER_SEND_GPU_ID=true`
+  and `--attribute-gpus`, every proof of the recorded run came from a job
+  for the GPU's UUID, `GPU-425a2592-…`.
+- **The live verifier fell behind.** The recorded run served 540 prompts of
+  2,048 tokens at 3 per second. Verdicts lagged submissions by up to 20 s,
+  because the verifier hashes every declared weight matrix again for each
+  new job, on the pod's 6.8 CPU cores. The run script stopped it 15 s after
+  the load ended, so 14 of the 198 submitted proofs never got a verdict. The
+  script now waits until the verifier's log stops growing.
+- **Replaying the recording reproduces every verdict.** On a laptop,
+  `pouw.recording` rechecked all 198 recorded proofs at their arrival times.
+  It reached the same verdict for each of the 184 the live verifier checked,
+  and accepted the other 14.
+- **The work estimate matches the plugin's own count.** The 197 accepted
+  proofs imply 5.16 × 10¹⁵ multiply-adds. The plugin's GEMM log
+  (`patches/0003-log-gemm-shapes.patch`) counts 5.29 × 10¹⁵ multiply-adds in
+  noisy multiplies, including warm-up: 2.4% more. With about 200 proofs, the
+  estimate's expected spread is about 7%.
+- **The proven share depends on the load.** In the recorded run, 97% of the
+  int7 GEMM work used the noisy multiply. In a decode-heavy run, 200 prompts
+  of 256 tokens with 512 output tokens each, only 40% did, because most
+  decode batches had fewer than 1,024 tokens.
+- **The GPU can't attest outside CC mode.** NVML reported confidential
+  computing off (`ccFeature=0`), and both the certificate and attestation
+  report calls failed with `NVML_ERROR_UNKNOWN`. The UUID and serial number
+  were readable, and both are unsigned.
+
+### Third H100 session
+
+Measured on 2026-10-11 on a third H100 SXM pod, as fast as the first. Logs
+are in `runs/h100-2026-10-11b/`, which git ignores, and
+`scripts/gpu/demo_session2.sh` reproduces most of them. Timings are medians
+of three runs on the same load as the first session.
+
+| Run | Median |
+|---|---|
+| Plain multiply | 9.2 s |
+| Noisy multiply, proofs off | 12.1 s |
+| Noisy multiply, proofs on, nothing can win (two runs) | 12.4 s |
+| Proofs on, with the GIL patch | 22.4 s |
+| Proofs on, without the GIL patch | 28.5 s |
+
+- **The noisy multiply costs about 30%.** 12.1 s against 9.2 s, the same as
+  the first session (+32%).
+- **The GIL patch helps, but most of the proof cost remains.** The patch and
+  unpatched libraries were built on the same pod and alternated, with
+  `tests/test_gil.py` confirming which was installed before each run. Proofs
+  on took 22.4 s with the patch and 28.5 s without it, and the unpatched
+  runs varied far more (27–38 s). Either way, proofs on costs 85–135% more
+  than proofs off.
+- **Handling wins is the cost, not watching for them.** The plugin queues a
+  Python callback for every noisy GEMM. With a target nothing can win, proofs
+  on took 12.4 s, the same as proofs off. So the remaining cost comes from
+  what happens on a win: copying the activations and the weight matrix to
+  the CPU, and building the proof.
+- **The verifier's lag makes honest proofs stale.** The plugin waits for each
+  verdict before sending its next proof. While the verifier hashes weights
+  for each new job, proofs queue in the plugin, and some reach the verifier
+  more than 15 s after their job was issued. In the recorded relay run, 28
+  honest proofs were rejected as stale. Each extra GPU ID adds a job, and
+  its own pass of weight hashing.
+- **Cheats sent through a relay fail the expected checks.** In a recorded
+  run, `pouw.cheat_relay` sent cheated copies of real proofs. Replays were
+  rejected as duplicates (4) or stale (2), easier targets at job binding
+  (5), changed activations and moved proofs at proof verification (5 each),
+  and held-back proofs as stale (5). Proofs under a made-up GPU ID were
+  accepted and credited to it.
+- **A changed checkpoint fails every proof.** vLLM served a copy of the
+  checkpoint with one weight changed in each int8 matrix, against a verifier
+  declaring the original. All 72 proofs failed the weight check.
+- **Replay matches live.** Replaying each recording reproduced every verdict
+  the live verifier gave.
 
 ### On a laptop
 
@@ -185,6 +271,56 @@ MINER_SKIP_BLOCK_SUBMISSION=true bash /root/pouw/scripts/gpu/run_e2e.sh   # nois
 connects by default, then vLLM and its benchmark. Run each setup more than
 once: the first run compiles kernels and is slower.
 
+## Demo
+
+The demo replays a recorded H100 run on your laptop and lets you run attacks
+against it. Every recorded proof goes through the verifier again, at its
+recorded arrival time, so each verdict on the page is a fresh check. The
+attacks send real submissions through the same verifier:
+
+- **Detected:** replay, precomputation, difficulty tampering, a forged
+  proof (one activation changed), model substitution (one weight changed),
+  and proof theft (the H100's proof moved onto another GPU's job). Each
+  fails the check named on its card.
+- **Undetected:** synthetic inputs (random activations with the declared
+  weights) and GPU ID spoofing (the laptop claims the H100's UUID). Both are
+  accepted. Covert training and relaying jobs to remote GPUs are listed
+  without a Run button, because the demo can't stage them honestly.
+
+Model substitution, synthetic inputs, and spoofing need a new proof, which
+the laptop builds on the CPU. A CPU can't find wins at the H100's target, so
+those jobs use a target of 1 win in 50 tiles. The work estimate accounts for
+each job's own target.
+
+To run it, download the checkpoint once, then start the server:
+
+```sh
+uvx --from huggingface_hub hf download pearl-ai/Llama-3.1-8B-Instruct-pearl --local-dir data/model
+docker run --rm -p 8080:8080 -v "$PWD":/work pouw-local python -m pouw.demo.server \
+  --run runs/h100-2026-10-11/demo runs/h100-2026-10-11b/cheats3 runs/h100-2026-10-11b/model-sub \
+  --timing runs/h100-2026-10-11b --weights data/model/*.safetensors
+```
+
+Then open http://localhost:8080. The run directory comes from
+`scripts/gpu/demo_session.sh`, which records it on an H100 pod. To pick
+between several recorded runs on the page, pass several directories to
+`--run`.
+
+**Recorded cheats.** `scripts/gpu/demo_session2.sh` records two more runs.
+In one, `pouw.cheat_relay` sits between the plugin and the verifier, and
+after every eighth honest proof sends a cheated copy: a replay, an easier
+target, one changed activation, another GPU's job, or a proof held past its
+job's expiry. For 30 seconds it also fakes the GPU ID. The relay logs each
+change, and the demo labels those submissions in the replay. In the other
+run, vLLM serves a copy of the checkpoint with one weight changed in every
+int8 matrix, against a verifier that declares the original.
+
+**Live mode.** With `--live`, the demo server is also the verifier: it
+listens on the socket the plugin connects to, and the page shows each proof
+as it arrives, with how long it waited for its verdict. On a pod, run
+`LIVE=1 bash scripts/gpu/run_e2e.sh` and forward port 8080 over SSH. Live
+mode also records the session, so you can replay it later.
+
 ## Layout
 
 - `src/pouw/jobs.py`: job headers carrying the random value, and the
@@ -195,6 +331,12 @@ once: the first run compiles kernels and is slower.
   in for the upstream gateway.
 - `src/pouw/cpu_prover.py`: the CPU stand-in for the GPU prover, with
   options to misbehave.
+- `src/pouw/recording.py`: records a verifier session and rebuilds a verifier
+  that replays it.
+- `src/pouw/demo/`: the demo server, its replay, live mode, attacks, and
+  the page.
+- `src/pouw/cheat_relay.py`: a relay between the prover and the verifier that
+  sends cheated copies of real proofs on a schedule.
 - `scripts/fetch_tensors.py`: downloads individual tensors from a Hugging Face
   checkpoint.
 - `scripts/summarize_log.py`: counts accepted and rejected proofs in a
