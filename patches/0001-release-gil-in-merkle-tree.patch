@@ -1,0 +1,73 @@
+diff --git a/pearl-blake3/src/merkle_py.rs b/pearl-blake3/src/merkle_py.rs
+index eb56e55..7cc2e73 100644
+--- a/pearl-blake3/src/merkle_py.rs
++++ b/pearl-blake3/src/merkle_py.rs
+@@ -12,7 +12,7 @@ use crate::merkle::{MerkleProof, MerkleTree};
+ impl MerkleTree {
+     #[new]
+     #[pyo3(signature = (data, key))]
+-    fn py_new(data: &[u8], key: &[u8]) -> PyResult<Self> {
++    fn py_new(py: Python<'_>, data: &[u8], key: &[u8]) -> PyResult<Self> {
+         let key: [u8; OUT_LEN] = key.try_into().map_err(|_| {
+             PyValueError::new_err(format!(
+                 "key must be exactly {} bytes, got {}",
+@@ -20,7 +20,11 @@ impl MerkleTree {
+                 key.len()
+             ))
+         })?;
+-        Ok(Self::new(data, key))
++        // Hashing a large matrix takes a fraction of a second, so release the
++        // GIL while it runs. `data` borrows an immutable `bytes` object that
++        // the call's arguments keep alive until this function returns, so no
++        // other thread can change or free it meanwhile.
++        Ok(py.allow_threads(|| Self::new(data, key)))
+     }
+ 
+     #[getter(root)]
+@@ -37,8 +41,10 @@ impl MerkleTree {
+     }
+ 
+     #[pyo3(name = "get_multileaf_proof")]
+-    fn py_get_multileaf_proof(&self, leaf_indices: Vec<usize>) -> MerkleProof {
+-        self.get_multileaf_proof(&leaf_indices)
++    fn py_get_multileaf_proof(&self, py: Python<'_>, leaf_indices: Vec<usize>) -> MerkleProof {
++        // Nothing changes a tree after it's built, so reading it without the
++        // GIL is safe.
++        py.allow_threads(|| self.get_multileaf_proof(&leaf_indices))
+     }
+ 
+     #[staticmethod]
+diff --git a/py-pearl-mining/src/lib.rs b/py-pearl-mining/src/lib.rs
+index d332730..fb86eab 100644
+--- a/py-pearl-mining/src/lib.rs
++++ b/py-pearl-mining/src/lib.rs
+@@ -12,7 +12,7 @@ use pyo3::prelude::*;
+ use std::sync::Mutex;
+ 
+ use blake3::CHUNK_LEN;
+-use pearl_blake3::{pad_to_chunk_boundary, MerkleProof, MerkleTree};
++use pearl_blake3::{padded_chunk_len, MerkleProof, MerkleTree};
+ use primitive_types::U256;
+ use zk_pow::api::proof::{
+     IncompleteBlockHeader, MMAType, MiningConfiguration, MoEConfig, PeriodicPattern,
+@@ -166,8 +166,18 @@ fn verify_proof_v3(
+ 
+ #[pyfunction]
+ #[pyo3(name = "pad_to_chunk_boundary")]
+-fn py_pad_to_chunk_boundary(data: &[u8]) -> Vec<u8> {
+-    pad_to_chunk_boundary(data)
++fn py_pad_to_chunk_boundary<'py>(
++    py: Python<'py>,
++    data: &[u8],
++) -> PyResult<Bound<'py, pyo3::types::PyBytes>> {
++    // Copy straight into the new `bytes` object, with the GIL released during
++    // the copy. pyo3 zeroes the new object, so the padding needs no writes.
++    // `data` borrows an immutable `bytes` argument, and Python can't see `out`
++    // until this function returns.
++    pyo3::types::PyBytes::new_with(py, padded_chunk_len(data.len()), |out| {
++        py.allow_threads(|| out[..data.len()].copy_from_slice(data));
++        Ok(())
++    })
+ }
+ 
+ #[pyfunction]
