@@ -38,8 +38,8 @@ Attacks, multi-GPU setups, and the KV cache come after this.
   with the lock released and copies each matrix once instead of four times.
   On one H100, alternating builds, proofs on took 19.0 s with it and 32.0 s
   without, against 12.5 s with proofs off (README, fourth session). The
-  change is proposed to upstream from the `pacifai/pearl` fork,
-  `release-gil-in-proofs` (internal review in pacifai/pearl#1). With a
+  change is proposed to upstream in pearl-research-labs/pearl#473, from the
+  `release-gil-in-proofs` branch of the `pacifai/pearl` fork. With a
   target nothing can win, proofs on cost almost nothing (third session), so
   the remaining 52% comes from handling wins. Next, in order of effort:
   keep one host copy of the weights so a win copies only the activations,
