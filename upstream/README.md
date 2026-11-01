@@ -2,7 +2,7 @@
 
 These files are unmodified copies from Pearl Research Labs'
 [open-source PoUW implementation](https://github.com/pearl-research-labs/pearl) at commit
-`2f8b770cac8f8b74be05c1fc51c2baeb76ce0701`, the same commit
+`d7c517d267f10f5bcbbdc366f3e603942f9a5ab5`, the same commit
 `docker/Dockerfile` builds. They keep the upstream directory layout and its
 ISC license (`LICENSE`). Nothing imports them. They're here so you can compare
 `src/pouw` with the code it adapts.

@@ -11,7 +11,7 @@ RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-too
 ENV PATH=/root/.cargo/bin:$PATH
 
 # Pin the upstream code so the proof format and verify function can't move.
-ARG UPSTREAM_COMMIT=2f8b770cac8f8b74be05c1fc51c2baeb76ce0701
+ARG UPSTREAM_COMMIT=d7c517d267f10f5bcbbdc366f3e603942f9a5ab5
 RUN git init /opt/upstream \
  && cd /opt/upstream \
  && git remote add origin https://github.com/pearl-research-labs/pearl \

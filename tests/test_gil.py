@@ -3,15 +3,15 @@
 The upstream vLLM plugin builds proofs inside vLLM's engine process. If the
 proof library holds Python's global interpreter lock (GIL) while it hashes a
 matrix, every other thread in that process stops until the hash finishes, and
-inference stalls. patches/0001-release-gil-in-merkle-tree.patch makes the
-library release the GIL during that work. This test fails without the patch.
+inference stalls. patches/0001-release-gil-in-proof-trees.patch adds
+MerkleTree.from_buffer, which releases the GIL during that work.
 """
 
 import threading
 import time
 
 import numpy as np
-from pearl_mining import MerkleTree, pad_to_chunk_boundary
+from pearl_mining import MerkleTree
 
 ROWS, COLS = 28672, 4096  # the fused gate_up_proj weight of Llama 3.1 8B: 117 MB of int8
 BUILDS = 5
@@ -20,7 +20,7 @@ KEY = bytes(range(32))
 
 
 def test_tree_build_lets_other_threads_run():
-    raw = np.random.default_rng(0).integers(-63, 64, size=(ROWS, COLS), dtype=np.int8).tobytes()
+    raw = np.random.default_rng(0).integers(-63, 64, size=(ROWS, COLS), dtype=np.int8)
 
     stop = threading.Event()
     ticks: list[float] = []
@@ -41,7 +41,7 @@ def test_tree_build_lets_other_threads_run():
     windows = []
     for _ in range(BUILDS):
         start = time.perf_counter()
-        root = MerkleTree(data=pad_to_chunk_boundary(raw), key=KEY).root
+        root = MerkleTree.from_buffer(raw, key=KEY).root
         windows.append((start, time.perf_counter()))
         assert len(root) == 32
 

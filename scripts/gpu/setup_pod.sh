@@ -10,7 +10,7 @@
 # CUDA 13, because upstream builds against PyTorch for CUDA 13.0.
 set -euo pipefail
 
-UPSTREAM_COMMIT="${UPSTREAM_COMMIT:-2f8b770cac8f8b74be05c1fc51c2baeb76ce0701}"
+UPSTREAM_COMMIT="${UPSTREAM_COMMIT:-d7c517d267f10f5bcbbdc366f3e603942f9a5ab5}"
 UPSTREAM_DIR=/opt/upstream
 PATCH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../patches" && pwd)"
 
