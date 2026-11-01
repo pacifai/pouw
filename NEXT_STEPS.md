@@ -32,24 +32,21 @@ Attacks, multi-GPU setups, and the KV cache come after this.
 
 ## To do
 
-- [ ] **Stop proof building from stalling inference.** The plugin builds each
-  proof inside vLLM's engine process, and the proof library held Python's
-  global lock (GIL) the whole time. `patches/0001-release-gil-in-merkle-tree.patch`
-  makes the library release it while it hashes. In Docker on a laptop, a
-  second Python thread now gets 61–67% of its possible turns during a tree
-  build, up from 6% (`tests/test_gil.py`), and proofs are unchanged. The
-  plugin's own copies of each matrix still hold the lock, and on the laptop
-  they take about as long as the hash. On one H100, alternating the two
-  libraries, proofs on took 22.4 s with the patch and 28.5 s without it,
-  against 12.1 s with proofs off (medians of three runs). With a target
-  nothing can win, proofs on took 12.4 s, so the per-GEMM callbacks cost
-  almost nothing: the remaining cost is handling wins. Next, in order of
-  effort: keep one host copy of the weights so a win copies only the
-  activations, build proofs in a separate process, and have the GPU's
-  existing Merkle tree kernel supply the proof paths. The win rate is also a
-  lever: fewer wins cost less but make the work estimate noisier. *Done
-  when:* overhead with proofs on is within a few percent of overhead with
-  proofs off.
+- [ ] **Stop proof building from stalling inference.** The plugin builds
+  each proof inside vLLM's engine process, and building the Merkle trees
+  held Python's global lock (GIL) throughout. `patches/0001` builds them
+  with the lock released and copies each matrix once instead of four times.
+  On one H100, alternating builds, proofs on took 19.0 s with it and 32.0 s
+  without, against 12.5 s with proofs off (README, fourth session). The
+  change is proposed to upstream from the `pacifai/pearl` fork,
+  `release-gil-in-proofs` (internal review in pacifai/pearl#1). With a
+  target nothing can win, proofs on cost almost nothing (third session), so
+  the remaining 52% comes from handling wins. Next, in order of effort:
+  keep one host copy of the weights so a win copies only the activations,
+  build proofs in a separate process, and have the GPU's existing Merkle
+  tree kernel supply the proof paths. The win rate is also a lever: fewer
+  wins cost less but make the work estimate noisier. *Done when:* overhead
+  with proofs on is within a few percent of overhead with proofs off.
 - [ ] **Measure at more load levels and targets.** Proven share now exists
   for two loads: 97% of int7 GEMM work for 2,048-token prompts at 3 per
   second, and 40% for 256-token prompts with 512-token answers. Next,
