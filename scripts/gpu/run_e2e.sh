@@ -26,6 +26,9 @@ set -euo pipefail
 MODEL="${MODEL:-/root/model}"
 UPSTREAM=/opt/upstream
 PY="$UPSTREAM/.venv/bin/python"
+# The verifier can run in its own environment, so a session can swap the
+# plugin's proof library without changing the verifier's.
+VERIFIER_PY="${VERIFIER_PY:-$PY}"
 WIN="${WIN:-1e-8}"
 PROMPTS="${PROMPTS:-200}"
 INPUT_LEN="${INPUT_LEN:-2048}"
@@ -57,12 +60,12 @@ verifier_args=()
 [ "$RECORD" = 1 ] && verifier_args+=(--record "$OUT/recording.jsonl")
 [ "$ATTRIBUTE" = 1 ] && verifier_args+=(--attribute-gpus)
 if [ "$LIVE" = 1 ]; then
-  PYTHONPATH=/root/pouw/src "$PY" -m pouw.demo.server --live --socket "$VERIFIER_SOCKET" \
+  PYTHONPATH=/root/pouw/src "$VERIFIER_PY" -m pouw.demo.server --live --socket "$VERIFIER_SOCKET" \
     --weights "$VERIFY_WEIGHTS"/*.safetensors --win-probability "$WIN" --log "$OUT/verifier.jsonl" \
     --shapes "$OUT/gemm_shapes.jsonl" --serving-since "$OUT/serving_since" "${verifier_args[@]}" \
     > "$OUT/verifier.out" 2>&1 &
 else
-  PYTHONPATH=/root/pouw/src "$PY" -m pouw.verifier --socket "$VERIFIER_SOCKET" --weights "$VERIFY_WEIGHTS"/*.safetensors \
+  PYTHONPATH=/root/pouw/src "$VERIFIER_PY" -m pouw.verifier --socket "$VERIFIER_SOCKET" --weights "$VERIFY_WEIGHTS"/*.safetensors \
     --win-probability "$WIN" --log "$OUT/verifier.jsonl" "${verifier_args[@]}" > "$OUT/verifier.out" 2>&1 &
 fi
 pids+=($!)
@@ -72,7 +75,7 @@ head -2 "$OUT/verifier.out"
 if [ "$RELAY" = 1 ]; then
   echo "== cheat relay"
   # shellcheck disable=SC2086  # RELAY_ARGS is a list of flags
-  PYTHONPATH=/root/pouw/src "$PY" -m pouw.cheat_relay --listen "$SOCKET" --upstream "$VERIFIER_SOCKET" \
+  PYTHONPATH=/root/pouw/src "$VERIFIER_PY" -m pouw.cheat_relay --listen "$SOCKET" --upstream "$VERIFIER_SOCKET" \
     --log "$OUT/cheats.jsonl" $RELAY_ARGS > "$OUT/relay.out" 2>&1 &
   pids+=($!)
   for _ in $(seq 1 60); do grep -q "^listening" "$OUT/relay.out" 2>/dev/null && break; sleep 1; done

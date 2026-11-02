@@ -21,7 +21,6 @@ from pearl_mining import (
     MiningConfiguration,
     MMAType,
     PeriodicPattern,
-    pad_to_chunk_boundary,
 )
 from safetensors import safe_open
 
@@ -54,8 +53,7 @@ def job_key(header_bytes: bytes, config: MiningConfiguration) -> bytes:
 
 def merkle_root(matrix: np.ndarray, key: bytes) -> bytes:
     """The proof format's Merkle root of an int8 matrix, rows laid end to end."""
-    data = pad_to_chunk_boundary(np.ascontiguousarray(matrix).tobytes())
-    return bytes(MerkleTree(data=bytes(data), key=key).root)
+    return bytes(MerkleTree.from_buffer(np.ascontiguousarray(matrix), key).root)
 
 
 def fuse_like_vllm(tensors: dict[str, np.ndarray]) -> dict[str, np.ndarray]:

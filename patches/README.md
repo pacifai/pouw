@@ -1,7 +1,7 @@
 # Patches to the upstream code
 
 Each `.patch` file here is a `git diff` against the pinned upstream commit
-(`2f8b770cac8f8b74be05c1fc51c2baeb76ce0701`), with paths relative to the
+(`d7c517d267f10f5bcbbdc366f3e603942f9a5ab5`), with paths relative to the
 upstream repo root. `docker/Dockerfile` and `scripts/gpu/setup_pod.sh` apply
 every `*.patch` file, in name order, after they check out that commit and
 before they build anything. The files in `upstream/` stay unpatched.
@@ -10,47 +10,38 @@ To change a patch, check out the pinned commit, apply the existing patches,
 edit the code, and save the result with `git diff > patches/<name>.patch`.
 When the pin moves, check that each patch still applies, and rerun the tests.
 
-## 0001-release-gil-in-merkle-tree.patch
+## 0001-release-gil-in-proof-trees.patch
 
-**What it changes.** The proof library's Python bindings now release Python's
-global interpreter lock (GIL) while they do heavy work:
+**What it changes.** The vLLM plugin builds the Merkle trees for each winning
+proof with Python's global interpreter lock (GIL) released. The GIL is a lock
+every Python thread in a process must hold to run Python code. The patch is
+the three commits on `release-gil-in-proofs` in the `pacifai/pearl` fork,
+proposed to upstream:
 
-- `MerkleTree(data, key)`, which hashes a whole matrix and copies it;
-- `MerkleTree.get_multileaf_proof`, which collects the opened rows and their
-  sibling hashes;
-- `pad_to_chunk_boundary`, which copies the matrix bytes. It now copies them
-  once, straight into the returned `bytes` object, instead of twice.
+- `MerkleTree::from_vec` builds a tree from an existing buffer.
+- `MerkleTree.from_buffer(data, key)`, in the Python bindings, takes a
+  C-contiguous int8 buffer such as a NumPy array, copies it once into a
+  zero-padded buffer, and builds the tree with the GIL released. Its root
+  equals `MerkleTree(pad_to_chunk_boundary(bytes(data)), key)`.
+- The plugin's `MatrixMerkleTree` passes the tensor's NumPy view to
+  `from_buffer`.
 
-The GIL is a lock that every Python thread in a process must hold to run
-Python code. Native code can release it while it works on data that Python
-can't touch.
+This repo's verifier and CPU prover build their trees with `from_buffer` too.
 
-**Why.** The upstream vLLM plugin builds each proof on the CPU inside vLLM's
-engine process. On an H100 pod, building one proof, including the plugin's
-copies of the matrices, took 0.1 s for a 4096 × 4096 int8 matrix and 0.39 s
-for a 28672 × 4096 one, and it held the GIL nearly the whole time. Every other
-thread in the engine stopped meanwhile,
-so each winning tile froze inference, and a benchmark run took three times as
-long as the plain multiply.
+**Why.** The plugin builds each proof inside vLLM's engine process. Upstream,
+building a tree copied the matrix four times (`tobytes()`, two copies in
+`pad_to_chunk_boundary`, and the tree's own copy) and held the GIL through
+the copies and the hash, so every win stalled inference. An earlier version
+of this patch released the GIL only around the hash; the plugin's
+`tobytes()` copy still held it.
 
-**Why it's safe.** The functions read their input through a borrowed view of
-a Python `bytes` object. `bytes` objects can't change, and the call's
-arguments keep the object alive until the function returns, so another thread
-can't alter or free the data while the lock is released. A tree is never
-changed after it's built, so reading it without the lock is safe too. The
-patch changes no hashing or proof logic: roots, padded data, and serialized
-proofs are byte-identical with and without it.
+**Measured.** On one H100, alternating builds, the same load ran in 19.0 s
+with the patch and 32.0 s without it, against 12.5 s with proofs off
+(`README.md`, fourth H100 session).
 
-**Test.** `tests/test_gil.py` builds a tree over 117 MB while a second Python
-thread counts its own turns. On an Apple M-series laptop, in Docker, the
-second thread ran during 10 of about 160 possible turns without the patch
-(6%) and 85–94 of about 140 with it (61–67%).
-
-**What it doesn't change.** The plugin's Python code still copies each matrix
-to host memory and into a `bytes` object (`tensor.cpu().numpy().tobytes()`)
-before it calls the library, and that copy still holds the GIL. On an Apple
-M-series laptop, in Docker, it takes 13–43 ms for a 117 MB matrix, about as
-long as the hash. Nobody has measured it on the H100 pod yet.
+**Test.** `tests/test_gil.py` builds a 117 MB tree while a second Python
+thread counts its own turns, and fails if the GIL is held for the build. The
+patch's own tests are in the fork.
 
 ## 0002-send-gpu-id.patch
 
