@@ -93,7 +93,7 @@ index f389a5da..28b07520 100644
      fn test_leaf_count() {
          let key = test_key();
 diff --git a/pearl-blake3/src/merkle_py.rs b/pearl-blake3/src/merkle_py.rs
-index eb56e558..bafb7de9 100644
+index eb56e558..75961fce 100644
 --- a/pearl-blake3/src/merkle_py.rs
 +++ b/pearl-blake3/src/merkle_py.rs
 @@ -3,10 +3,12 @@
@@ -111,32 +111,29 @@ index eb56e558..bafb7de9 100644
  
  #[pymethods]
  impl MerkleTree {
-@@ -23,6 +25,20 @@ impl MerkleTree {
+@@ -23,6 +25,17 @@ impl MerkleTree {
          Ok(Self::new(data, key))
      }
  
 +    #[staticmethod]
 +    #[pyo3(name = "from_buffer", signature = (data, key))]
 +    fn py_from_buffer(py: Python<'_>, data: PyBuffer<i8>, key: Digest) -> PyResult<Self> {
-+        if !data.is_c_contiguous() {
-+            return Err(PyValueError::new_err("data must be C-contiguous"));
-+        }
-+        let (addr, len) = (data.buf_ptr() as usize, data.len_bytes());
-+        Ok(py.allow_threads(|| {
-+            let mut padded = vec![0u8; padded_chunk_len(len)];
-+            unsafe { std::ptr::copy_nonoverlapping(addr as *const u8, padded.as_mut_ptr(), len) };
-+            Self::from_vec(padded, key)
-+        }))
++        let len = data.item_count();
++        let mut padded = vec![0u8; padded_chunk_len(len)];
++        let target =
++            unsafe { std::slice::from_raw_parts_mut(padded.as_mut_ptr().cast::<i8>(), len) };
++        data.copy_to_slice(py, target)?;
++        Ok(py.allow_threads(|| Self::from_vec(padded, key)))
 +    }
 +
      #[getter(root)]
      fn py_root<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
          PyBytes::new(py, &self.root())
 diff --git a/py-pearl-mining/tests/test_python_api.py b/py-pearl-mining/tests/test_python_api.py
-index c00ab795..04cd650c 100644
+index c00ab795..58d5af51 100644
 --- a/py-pearl-mining/tests/test_python_api.py
 +++ b/py-pearl-mining/tests/test_python_api.py
-@@ -548,3 +548,21 @@ class TestV1NbitsOverride:
+@@ -548,3 +548,23 @@ class TestV1NbitsOverride:
              block_header, plain_proof, nbits_override=HARD_NBITS
          )
          assert not is_valid, "v1 verification accepted a proof above the override target"
@@ -154,7 +151,9 @@ index c00ab795..04cd650c 100644
 +        tree = pearl_mining.MerkleTree.from_buffer(memoryview(data).cast("b"), self.KEY)
 +        assert tree.root == expected
 +
-+    def test_rejects_non_contiguous_buffer(self):
-+        strided = memoryview(bytes(4096)).cast("b")[::2]
-+        with pytest.raises(ValueError, match="C-contiguous"):
-+            pearl_mining.MerkleTree.from_buffer(strided, self.KEY)
++    def test_root_of_non_contiguous_buffer(self):
++        strided = memoryview(bytes(i % 256 for i in range(4096))).cast("b")[::2]
++        expected = pearl_mining.MerkleTree(
++            pearl_mining.pad_to_chunk_boundary(strided.tobytes()), self.KEY
++        ).root
++        assert pearl_mining.MerkleTree.from_buffer(strided, self.KEY).root == expected

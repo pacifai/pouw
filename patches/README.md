@@ -15,13 +15,13 @@ When the pin moves, check that each patch still applies, and rerun the tests.
 **What it changes.** The vLLM plugin builds the Merkle trees for each winning
 proof with Python's global interpreter lock (GIL) released. The GIL is a lock
 every Python thread in a process must hold to run Python code. The patch is
-the three commits on `release-gil-in-proofs` in the `pacifai/pearl` fork,
+the four commits on `release-gil-in-proofs` in the `pacifai/pearl` fork,
 proposed to upstream:
 
 - `MerkleTree::from_vec` builds a tree from an existing buffer.
 - `MerkleTree.from_buffer(data, key)`, in the Python bindings, takes a
-  C-contiguous int8 buffer such as a NumPy array, copies it once into a
-  zero-padded buffer, and builds the tree with the GIL released. Its root
+  int8 buffer such as a NumPy array, copies it once into a zero-padded
+  buffer with the GIL held, and builds the tree with the GIL released. Its root
   equals `MerkleTree(pad_to_chunk_boundary(bytes(data)), key)`.
 - The plugin's `MatrixMerkleTree` passes the tensor's NumPy view to
   `from_buffer`.
@@ -33,14 +33,15 @@ building a tree copied the matrix four times (`tobytes()`, two copies in
 `pad_to_chunk_boundary`, and the tree's own copy) and held the GIL through
 the copies and the hash, so every win stalled inference. An earlier version
 of this patch released the GIL only around the hash; the plugin's
-`tobytes()` copy still held it.
+`tobytes()` copy still held it. Holding the GIL for the copy keeps another
+Python thread from changing the buffer mid-copy.
 
-**Measured.** On one H100, alternating builds, the same load ran in 19.0 s
-with the patch and 32.0 s without it, against 12.5 s with proofs off
-(`README.md`, fourth H100 session).
+**Measured.** On one H100, alternating builds, the same load ran in 21.5 s
+with the patch and 32.4 s without it, against 12.3 s with proofs off
+(`README.md`, fifth H100 session).
 
 **Test.** `tests/test_gil.py` builds a 117 MB tree while a second Python
-thread counts its own turns, and fails if the GIL is held for the build. The
+thread counts its own turns, and fails if the GIL is held for the hash. The
 patch's own tests are in the fork.
 
 ## 0002-send-gpu-id.patch

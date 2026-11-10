@@ -34,14 +34,15 @@ Attacks, multi-GPU setups, and the KV cache come after this.
 
 - [ ] **Stop proof building from stalling inference.** The plugin builds
   each proof inside vLLM's engine process, and building the Merkle trees
-  held Python's global lock (GIL) throughout. `patches/0001` builds them
-  with the lock released and copies each matrix once instead of four times.
-  On one H100, alternating builds, proofs on took 19.0 s with it and 32.0 s
-  without, against 12.5 s with proofs off (README, fourth session). The
+  held Python's global lock (GIL) throughout. `patches/0001` copies each
+  matrix once with the lock held, instead of four times, and hashes it with
+  the lock released. On one H100, alternating builds, proofs on took 21.5 s
+  with it and 32.4 s without, against 12.3 s with proofs off (README, fifth
+  session). The
   change is proposed to upstream in pearl-research-labs/pearl#473, from the
   `release-gil-in-proofs` branch of the `pacifai/pearl` fork. With a
   target nothing can win, proofs on cost almost nothing (third session), so
-  the remaining 52% comes from handling wins. Next, in order of effort:
+  the remaining 75% comes from handling wins. Next, in order of effort:
   keep one host copy of the weights so a win copies only the activations,
   build proofs in a separate process, and have the GPU's existing Merkle
   tree kernel supply the proof paths. The win rate is also a lever: fewer

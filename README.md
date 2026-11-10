@@ -206,8 +206,8 @@ of three runs on the same load as the first session.
 ### Fourth H100 session
 
 Measured on 2026-11-01 on another H100 SXM pod, with the upstream pin moved
-to commit `d7c517d` and the current `patches/0001`, which builds the proof
-trees with the GIL released. Logs are in `runs/h100-2026-11-01/`, which git
+to commit `d7c517d` and the first version of `patches/0001`, which copied
+and hashed the proof trees with the GIL released. Logs are in `runs/h100-2026-11-01/`, which git
 ignores, and `scripts/gpu/gil_session.sh` reproduces them. The load is the
 same as the first session's. Timings are medians of four proofs-on runs per
 library and three runs of the others.
@@ -237,6 +237,38 @@ library and three runs of the others.
   the plugin's environment, where the upstream library made it fail on
   every proof. Those runs are kept apart in `runs/h100-2026-11-01/invalid/`
   and not counted.
+
+### Fifth H100 session
+
+Measured on 2026-11-10 on another H100 SXM pod, after `patches/0001` changed
+to copy the caller's buffer with the GIL held and release it for hashing only.
+The first version copied with the GIL released, so another Python thread
+could change the buffer mid-copy. Logs are in `runs/h100-2026-11-10/`, which
+git ignores. The runs are `gil_session.sh`'s, plus a third library built on
+the same pod from the first version of the patch, alternating with the
+others. Timings are medians of four runs each.
+
+| Run | Median | Run time per proof |
+|---|---|---|
+| Plain multiply | 9.2 s | |
+| Noisy multiply, proofs off | 12.3 s | |
+| Proofs on, first version of `patches/0001` | 18.9 s | 0.18 s |
+| Proofs on, current `patches/0001` | 21.5 s | 0.30 s |
+| Proofs on, upstream | 32.4 s | 0.55 s |
+
+Run time per proof is the time proofs on add to proofs off, divided by the
+proofs sent. The verifier accepted every proof.
+
+- **Copying with the GIL held costs about 0.12 s per proof.** The current
+  patch removes about 45% of upstream's proof cost, and the first version
+  removed about two-thirds.
+- **The stall costs more than the copy takes.** A win copies about 150 MB
+  with the GIL held, which takes a few tens of milliseconds, yet each proof
+  costs about 120 ms more. A likely reason is that the GPU idles while vLLM's
+  scheduler waits for the GIL. Nobody has measured this.
+- **Compare per proof.** Proofs-on runs varied by up to 5 s, and proofs per
+  run from 21 to 45. The first version and upstream matched the fourth
+  session, at 18.9 s and 32.4 s against 19.0 s and 32.0 s.
 
 ### On a laptop
 
@@ -333,11 +365,11 @@ To run it, download the checkpoint once, then start the server:
 uvx --from huggingface_hub hf download pearl-ai/Llama-3.1-8B-Instruct-pearl --local-dir data/model
 docker run --rm -p 8080:8080 -v "$PWD":/work pouw-local python -m pouw.demo.server \
   --run runs/h100-2026-10-11/demo runs/h100-2026-10-11b/cheats3 runs/h100-2026-10-11b/model-sub \
-  --timing runs/h100-2026-11-01 --weights data/model/*.safetensors
+  --timing runs/h100-2026-11-10 --weights data/model/*.safetensors
 ```
 
 Then open http://localhost:8080. `--timing` names the folder of timing runs
-behind the overhead card, here the fourth session's. The run directory comes from
+behind the overhead card, here the fifth session's. The run directory comes from
 `scripts/gpu/demo_session.sh`, which records it on an H100 pod. To pick
 between several recorded runs on the page, pass several directories to
 `--run`.
