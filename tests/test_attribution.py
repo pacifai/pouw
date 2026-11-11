@@ -14,8 +14,9 @@ import pytest
 from safetensors.numpy import save_file
 
 from pouw import cpu_prover
-from pouw.cpu_prover import RpcClient, prove, random_activations
+from pouw.cpu_prover import prove, random_activations
 from pouw.jobs import JobIssuer, nbits_for_win_probability
+from pouw.rpc import RpcClient
 from pouw.verifier import UnixVerifierServer, Verifier
 from pouw.weights import DeclaredWeights
 

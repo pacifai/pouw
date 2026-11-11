@@ -1,19 +1,14 @@
-"""Record a verifier session so it can be checked again later, off the GPU.
+"""Record a verifier session, so its proofs can be checked again later, away from the GPU.
 
 With --record, the verifier appends one JSON line per event:
 
-- {"type": "settings", ...}: written once at startup, with the target and
-  the job interval and maximum age.
-- {"type": "job", ...}: every job it issues, with its header bytes, target,
-  issue time, and GPU ID.
-- {"type": "submission", ...}: every proof the prover sends, exactly as it
-  arrived, with the time it arrived.
+- {"type": "settings", ...}: once, at startup: the target, the job interval, and the maximum age.
+- {"type": "job", ...}: every job it issues.
+- {"type": "submission", ...}: every proof the prover sends, as it arrived, with its arrival time.
 
-That's everything a verifier needs to repeat each check. `replay_verifier`
-builds a verifier that knows the recorded jobs, so you can pass each recorded
-proof to `Verifier.check` with `now` set to its recorded arrival time and get
-the same verdict the live verifier gave. The demo uses this to replay an H100
-run on a laptop.
+Verifier.from_recording rebuilds a verifier that knows the recorded jobs.
+Checking each recorded proof with `now` set to its arrival time gives the
+verdict the live verifier gave.
 """
 
 from __future__ import annotations
@@ -21,12 +16,10 @@ from __future__ import annotations
 import base64
 import json
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .jobs import Job, JobIssuer
-from .verifier import Verifier
-from .weights import DeclaredWeights
 
 
 class Recorder:
@@ -37,6 +30,18 @@ class Recorder:
     def _write(self, event: dict) -> None:
         with self._lock, self.path.open("a") as f:
             f.write(json.dumps(event) + "\n")
+
+    def settings(self, issuer: JobIssuer, attribute_gpus: bool, win_probability: float) -> None:
+        self._write(
+            {
+                "type": "settings",
+                "nbits": issuer.nbits,
+                "interval_s": issuer.interval_s,
+                "max_age_s": issuer.max_age_s,
+                "attribute_gpus": attribute_gpus,
+                "win_probability": win_probability,
+            }
+        )
 
     def job(self, job: Job) -> None:
         self._write(
@@ -56,20 +61,20 @@ class Recorder:
 
 @dataclass
 class Recording:
-    jobs: list[Job]
-    # Each one is (arrival time, the submitPlainProof params as sent).
-    submissions: list[tuple[float, dict]]
-    issuer_settings: dict
+    jobs: list[Job] = field(default_factory=list)
+    # (arrival time, the submitPlainProof params as sent), in arrival order.
+    submissions: list[tuple[float, dict]] = field(default_factory=list)
+    settings: dict = field(default_factory=dict)
 
 
 def load(path: Path) -> Recording:
-    jobs, submissions, settings = [], [], {}
+    recording = Recording()
     for line in path.read_text().splitlines():
         if not line.strip():
             continue
         event = json.loads(line)
         if event["type"] == "job":
-            jobs.append(
+            recording.jobs.append(
                 Job(
                     header_bytes=base64.b64decode(event["header_bytes"]),
                     nbits=event["nbits"],
@@ -79,22 +84,8 @@ def load(path: Path) -> Recording:
                 )
             )
         elif event["type"] == "submission":
-            submissions.append((event["time"], event["params"]))
+            recording.submissions.append((event["time"], event["params"]))
         elif event["type"] == "settings":
-            settings = event
-    return Recording(jobs, submissions, settings)
-
-
-def replay_verifier(recording: Recording, weights: DeclaredWeights) -> Verifier:
-    """A verifier that knows every recorded job, with the recorded issuer settings."""
-    s = recording.issuer_settings
-    nbits = s.get("nbits", recording.jobs[0].nbits if recording.jobs else 0)
-    issuer = JobIssuer(
-        nbits=nbits,
-        interval_s=s.get("interval_s", 5.0),
-        max_age_s=s.get("max_age_s", 15.0),
-        forget_old=False,
-    )
-    for job in recording.jobs:
-        issuer._jobs[job.header_bytes] = job
-    return Verifier(issuer, weights, attribute_gpus=s.get("attribute_gpus", False))
+            recording.settings = event
+    recording.submissions.sort(key=lambda s: s[0])
+    return recording

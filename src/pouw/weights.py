@@ -99,9 +99,7 @@ class DeclaredWeights:
         with self._lock:
             roots = self._roots.get(cache_key)
             if roots is None:
-                roots = {
-                    merkle_root(t, key): name for name, t in self.tensors.items() if t.shape == (n, k)
-                }
+                roots = {merkle_root(t, key): name for name, t in self.tensors.items() if t.shape == (n, k)}
                 self._roots[cache_key] = roots
                 self._forget_old_jobs(keep=cache_key)
         return roots.get(root)

@@ -5,9 +5,10 @@ import threading
 
 import numpy as np
 
-from pouw.cpu_prover import RpcClient, prove, random_activations
+from pouw.cpu_prover import prove, random_activations
 from pouw.jobs import JobIssuer, nbits_for_win_probability
-from pouw.recording import Recorder, load, replay_verifier
+from pouw.recording import Recorder, load
+from pouw.rpc import RpcClient
 from pouw.verifier import UnixVerifierServer, Verifier
 from pouw.weights import DeclaredWeights
 
@@ -22,8 +23,7 @@ def test_recorded_session_replays_to_the_same_verdicts(tmp_path):
     recorder = Recorder(record)
     issuer = JobIssuer(nbits=nbits_for_win_probability(WIN, K), interval_s=60, max_age_s=60, on_new_job=recorder.job)
     sock = str(tmp_path / "gw.sock")
-    server = UnixVerifierServer(sock, Verifier(issuer, weights))
-    server.recorder = recorder
+    server = UnixVerifierServer(sock, Verifier(issuer, weights), recorder=recorder)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
         client = RpcClient(sock)
@@ -39,7 +39,7 @@ def test_recorded_session_replays_to_the_same_verdicts(tmp_path):
 
     recording = load(record)
     assert len(recording.jobs) == 1 and len(recording.submissions) == 2
-    verifier = replay_verifier(recording, weights)
+    verifier = Verifier.from_recording(recording, weights)
     replayed = [verifier.check(p["plain_proof"], p["mining_job"], now=t) for t, p in recording.submissions]
     assert [(v.accepted, v.reason) for v in replayed] == [(r["accepted"], r["reason"]) for r in live]
     assert live[0]["accepted"] and live[1]["reason"].startswith("duplicate")

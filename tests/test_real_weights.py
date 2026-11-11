@@ -43,10 +43,14 @@ def test_qkv_is_fused_like_vllm(weights):
     assert weights.tensors["model.layers.20.self_attn.qkv_proj.weight"].shape == (6144, 4096)
 
 
-@pytest.mark.parametrize("name", ["model.layers.0.self_attn.o_proj.weight", "model.layers.20.self_attn.qkv_proj.weight"])
+@pytest.mark.parametrize(
+    "name", ["model.layers.0.self_attn.o_proj.weight", "model.layers.20.self_attn.qkv_proj.weight"]
+)
 def test_real_matrix_proof_is_accepted(verifier, weights, name):
     job = verifier.issuer.current()
-    proof, _ = prove(job.header_bytes, job.cert_version, random_activations(128, 4096, seed=1), weights.tensors[name], seed=2)
+    proof, _ = prove(
+        job.header_bytes, job.cert_version, random_activations(128, 4096, seed=1), weights.tensors[name], seed=2
+    )
     verdict = verifier.check(proof.to_base64(), job.to_dict())
     assert verdict.accepted, verdict.reason
     assert verdict.weight == name
