@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install the upstream vLLM plugin on a fresh H100 pod.
+# Install the upstream vLLM plugin on a fresh H100 pod, and download the model.
 #
 # Runs on the pod, not your laptop. It installs uv and Rust, clones the
 # upstream repo at the same commit docker/Dockerfile pins, applies this repo's
@@ -36,5 +36,10 @@ uv python install 3.12
 # uv doesn't notice changed Rust sources, so rebuild the proof library every
 # time to pick up the patches.
 UV_TORCH_BACKEND=cu130 uv sync --all-packages --all-groups --reinstall-package py-pearl-mining
+
+MODEL=/root/model
+if [ ! -f "$MODEL/config.json" ]; then
+  uvx --from huggingface_hub hf download pearl-ai/Llama-3.1-8B-Instruct-pearl --local-dir "$MODEL"
+fi
 
 uv run python -c "import torch, vllm, pearl_gemm, pearl_mining; print('torch', torch.__version__, 'cuda', torch.version.cuda, 'gpu', torch.cuda.get_device_name(0)); print('vllm', vllm.__version__)"

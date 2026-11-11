@@ -17,10 +17,10 @@
 # turns on GPU attribution on both sides, SHAPES=1 logs every int7 GEMM's
 # shape (patches/0003), and RATE sets requests per second (default: all at
 # once). RELAY=1 puts pouw.cheat_relay between the plugin and the verifier,
-# with RELAY_ARGS passed to it. LIVE=1 runs the demo server in live mode as
-# the verifier, on port 8080. VERIFY_WEIGHTS sets the checkpoint the verifier
-# declares, if it differs from the one vLLM serves. DESCRIPTION is saved for
-# the demo's run picker.
+# with RELAY_ARGS passed to it. VERIFY_WEIGHTS sets the checkpoint the
+# verifier declares, if it differs from the one vLLM serves. DESCRIPTION and
+# both checkpoints go into run.json, which pouw.session reads. RUNS sets the
+# folder that holds the run's folder.
 set -euo pipefail
 
 MODEL="${MODEL:-/root/model}"
@@ -40,13 +40,13 @@ SHAPES="${SHAPES:-0}"
 RATE="${RATE:-inf}"
 RELAY="${RELAY:-0}"
 RELAY_ARGS="${RELAY_ARGS:-}"
-LIVE="${LIVE:-0}"
 VERIFY_WEIGHTS="${VERIFY_WEIGHTS:-$MODEL}"
 LABEL="${LABEL:-$([ "$NO_MINING" = 1 ] && echo plain || echo noisy)-$(date +%H%M%S)}"
-OUT=/root/pouw/runs/$LABEL
+OUT="${RUNS:-/root/pouw/runs}/$LABEL"
 SOCKET=/tmp/pearlgw.sock
 mkdir -p "$OUT"
-[ -n "${DESCRIPTION:-}" ] && echo "$DESCRIPTION" > "$OUT/description.txt"
+printf '{"description": "%s", "model": "%s", "declared_model": "%s"}\n' \
+  "${DESCRIPTION:-$LABEL}" "$MODEL" "$VERIFY_WEIGHTS" > "$OUT/run.json"
 export PATH="$UPSTREAM/.venv/bin:/usr/local/cuda/bin:$PATH"
 
 pids=()
@@ -59,15 +59,8 @@ rm -f "$SOCKET" /tmp/verifier.sock  # a socket file left by an earlier run would
 verifier_args=()
 [ "$RECORD" = 1 ] && verifier_args+=(--record "$OUT/recording.jsonl")
 [ "$ATTRIBUTE" = 1 ] && verifier_args+=(--attribute-gpus)
-if [ "$LIVE" = 1 ]; then
-  PYTHONPATH=/root/pouw/src "$VERIFIER_PY" -m pouw.demo.server --live --socket "$VERIFIER_SOCKET" \
-    --weights "$VERIFY_WEIGHTS"/*.safetensors --win-probability "$WIN" --log "$OUT/verifier.jsonl" \
-    --shapes "$OUT/gemm_shapes.jsonl" --serving-since "$OUT/serving_since" "${verifier_args[@]}" \
-    > "$OUT/verifier.out" 2>&1 &
-else
-  PYTHONPATH=/root/pouw/src "$VERIFIER_PY" -m pouw.verifier --socket "$VERIFIER_SOCKET" --weights "$VERIFY_WEIGHTS"/*.safetensors \
-    --win-probability "$WIN" --log "$OUT/verifier.jsonl" "${verifier_args[@]}" > "$OUT/verifier.out" 2>&1 &
-fi
+PYTHONPATH=/root/pouw/src "$VERIFIER_PY" -m pouw.verifier --socket "$VERIFIER_SOCKET" --weights "$VERIFY_WEIGHTS"/*.safetensors \
+  --win-probability "$WIN" --log "$OUT/verifier.jsonl" "${verifier_args[@]}" > "$OUT/verifier.out" 2>&1 &
 pids+=($!)
 for _ in $(seq 1 600); do grep -q "^listening" "$OUT/verifier.out" 2>/dev/null && break; sleep 1; done
 grep -q "^listening" "$OUT/verifier.out" || { echo "verifier never started listening"; tail "$OUT/verifier.out"; exit 1; }
