@@ -4,7 +4,7 @@ Each `.patch` file here is a `git diff` against the pinned upstream commit
 (`d7c517d267f10f5bcbbdc366f3e603942f9a5ab5`), with paths relative to the
 upstream repo root. `docker/Dockerfile` and `scripts/gpu/setup_pod.sh` apply
 every `*.patch` file, in name order, after they check out that commit and
-before they build anything. The files in `upstream/` stay unpatched.
+before they build anything.
 
 To change a patch, check out the pinned commit, apply the existing patches,
 edit the code, and save the result with `git diff > patches/<name>.patch`.
@@ -26,7 +26,7 @@ proposed to upstream:
 - The plugin's `MatrixMerkleTree` passes the tensor's NumPy view to
   `from_buffer`.
 
-This repo's verifier and CPU prover build their trees with `from_buffer` too.
+This repository's verifier and CPU prover build their trees with `from_buffer` too.
 
 **Why.** The plugin builds each proof inside vLLM's engine process. Upstream,
 building a tree copied the matrix four times (`tobytes()`, two copies in
@@ -37,12 +37,9 @@ of this patch released the GIL only around the hash; the plugin's
 Python thread from changing the buffer mid-copy.
 
 **Measured.** On one H100, alternating builds, the same load ran in 21.5 s
-with the patch and 32.4 s without it, against 12.3 s with proofs off
-(`README.md`, fifth H100 session).
+with the patch and 32.4 s without it, against 12.3 s with proofs off.
 
-**Test.** `tests/test_gil.py` builds a 117 MB tree while a second Python
-thread counts its own turns, and fails if the GIL is held for the hash. The
-patch's own tests are in the fork.
+**Tests.** The patch's own tests are in the fork.
 
 ## 0002-send-gpu-id.patch
 
@@ -60,8 +57,7 @@ reports its own GPU.
 
 **Limits.** The UUID is whatever the driver reports, and nothing signs it, so
 a dishonest host can fake it. Upstream's own gateway rejects the extra
-parameter, so use this setting only with this repo's verifier. Nobody has run
-this patch on a GPU yet.
+parameter, so use this setting only with this repository's verifier.
 
 ## 0003-log-gemm-shapes.patch
 
@@ -72,7 +68,8 @@ multiply ran. It buffers lines and writes them 4,096 at a time. Without the
 variable, it does nothing.
 
 **Why.** Proofs only show the batches that used the noisy multiply. To report
-what share of int7 GEMM work earned proofs, and to draw each batch in the
-demo, you also need the batches that fell under `min_m` and used the plain
-multiply. Leave it off for timing runs, since it adds a Python call and some
-file writes per GEMM.
+what share of int7 GEMM work earned proofs, you also need the batches that
+fell under `min_m` and used the plain multiply. `pouw.session` reads the log
+for each run's proven share, and `runpod/record.py --shapes` turns it on.
+Leave it off for timing runs, since it adds a Python call and some file writes
+per GEMM.
