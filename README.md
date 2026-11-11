@@ -105,8 +105,8 @@ ignores.
   Python's global lock for 0.1–0.4 s, freezing inference. Wins also arrive
   faster than proofs get built, and the queued ones were lost when the run
   stopped, so later runs undercounted the work.
-  `patches/0001-release-gil-in-merkle-tree.patch` now makes the proof library
-  release the lock while it hashes. The second session below measures it.
+  An earlier version of `patches/0001` released the lock while the library
+  hashed. The fourth session below measures the current version.
 - **vLLM's startup warm-up produces valid proofs.** Before serving requests,
   vLLM runs forward passes on dummy inputs. These went through the noisy
   multiply, and two of three runs produced proofs from them. The verifier
@@ -203,6 +203,73 @@ of three runs on the same load as the first session.
 - **Replay matches live.** Replaying each recording reproduced every verdict
   the live verifier gave.
 
+### Fourth H100 session
+
+Measured on 2026-11-01 on another H100 SXM pod, with the upstream pin moved
+to commit `d7c517d` and the first version of `patches/0001`, which copied
+and hashed the proof trees with the GIL released. Logs are in `runs/h100-2026-11-01/`, which git
+ignores, and `scripts/gpu/gil_session.sh` reproduces them. The load is the
+same as the first session's. Timings are medians of four proofs-on runs per
+library and three runs of the others.
+
+| Run | Median |
+|---|---|
+| Plain multiply | 9.2 s |
+| Noisy multiply, proofs off | 12.5 s |
+| Proofs on, with `patches/0001` | 19.0 s |
+| Proofs on, upstream | 32.0 s |
+
+- **The patch cuts the cost of proofs by two-thirds.** Proofs on add 6.5 s
+  to proofs off with the patch and 19.5 s without it. The patched runs also
+  earned more proofs, 34–47 against 32–36, so the gain per proof is larger:
+  about 0.16 s of run time per proof, against 0.56 s. The verifier accepted
+  every proof in both.
+- **Proofs on still cost about half again.** With the patch, proofs on take
+  52% longer than proofs off. A win still copies both matrices from the GPU
+  to host memory and hashes them on the CPU. Nobody has measured how the
+  remaining cost splits between the two.
+- **The noisy multiply costs about a third**, 12.5 s against 9.2 s, in line
+  with the earlier sessions.
+- **How the runs compare.** Both libraries were built on the same pod, and
+  the runs alternated. Each switch applied or reverted the patch in the
+  upstream checkout and installed the matching library. The verifier ran in
+  its own environment with the patched library. A first attempt ran it in
+  the plugin's environment, where the upstream library made it fail on
+  every proof. Those runs are kept apart in `runs/h100-2026-11-01/invalid/`
+  and not counted.
+
+### Fifth H100 session
+
+Measured on 2026-11-10 on another H100 SXM pod, after `patches/0001` changed
+to copy the caller's buffer with the GIL held and release it for hashing only.
+The first version copied with the GIL released, so another Python thread
+could change the buffer mid-copy. Logs are in `runs/h100-2026-11-10/`, which
+git ignores. The runs are `gil_session.sh`'s, plus a third library built on
+the same pod from the first version of the patch, alternating with the
+others. Timings are medians of four runs each.
+
+| Run | Median | Run time per proof |
+|---|---|---|
+| Plain multiply | 9.2 s | |
+| Noisy multiply, proofs off | 12.3 s | |
+| Proofs on, first version of `patches/0001` | 18.9 s | 0.18 s |
+| Proofs on, current `patches/0001` | 21.5 s | 0.30 s |
+| Proofs on, upstream | 32.4 s | 0.55 s |
+
+Run time per proof is the time proofs on add to proofs off, divided by the
+proofs sent. The verifier accepted every proof.
+
+- **Copying with the GIL held costs about 0.12 s per proof.** The current
+  patch removes about 45% of upstream's proof cost, and the first version
+  removed about two-thirds.
+- **The stall costs more than the copy takes.** A win copies about 150 MB
+  with the GIL held, which takes a few tens of milliseconds, yet each proof
+  costs about 120 ms more. A likely reason is that the GPU idles while vLLM's
+  scheduler waits for the GIL. Nobody has measured this.
+- **Compare per proof.** Proofs-on runs varied by up to 5 s, and proofs per
+  run from 21 to 45. The first version and upstream matched the fourth
+  session, at 18.9 s and 32.4 s against 19.0 s and 32.0 s.
+
 ### On a laptop
 
 - **The verifier works against real proofs.** A CPU stand-in for the prover
@@ -298,10 +365,11 @@ To run it, download the checkpoint once, then start the server:
 uvx --from huggingface_hub hf download pearl-ai/Llama-3.1-8B-Instruct-pearl --local-dir data/model
 docker run --rm -p 8080:8080 -v "$PWD":/work pouw-local python -m pouw.demo.server \
   --run runs/h100-2026-10-11/demo runs/h100-2026-10-11b/cheats3 runs/h100-2026-10-11b/model-sub \
-  --timing runs/h100-2026-10-11b --weights data/model/*.safetensors
+  --timing runs/h100-2026-11-10 --weights data/model/*.safetensors
 ```
 
-Then open http://localhost:8080. The run directory comes from
+Then open http://localhost:8080. `--timing` names the folder of timing runs
+behind the overhead card, here the fifth session's. The run directory comes from
 `scripts/gpu/demo_session.sh`, which records it on an H100 pod. To pick
 between several recorded runs on the page, pass several directories to
 `--run`.

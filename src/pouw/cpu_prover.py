@@ -25,7 +25,6 @@ from pearl_mining import (
     MerkleTree,
     PeriodicPattern,
     PlainProof,
-    pad_to_chunk_boundary,
     verify_plain_proof_for_cert_version,
 )
 from safetensors.numpy import load_file
@@ -95,8 +94,8 @@ def prove(
     m, k = A.shape
     n, _ = Bt.shape
     key = job_key(header_bytes, gpu_proof_config(k))
-    tree_a = MerkleTree(data=bytes(pad_to_chunk_boundary(A.tobytes())), key=key)
-    tree_b = MerkleTree(data=bytes(pad_to_chunk_boundary(Bt.tobytes())), key=key)
+    tree_a = MerkleTree.from_buffer(np.ascontiguousarray(A), key)
+    tree_b = MerkleTree.from_buffer(np.ascontiguousarray(Bt), key)
     header = IncompleteBlockHeader.from_bytes(header_bytes)
 
     tiles = [(r, c) for r in tile_starts(ROWS_PATTERN, m) for c in tile_starts(COLS_PATTERN, n)]

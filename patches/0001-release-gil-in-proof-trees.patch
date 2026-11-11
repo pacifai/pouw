@@ -1,0 +1,159 @@
+diff --git a/miner/miner-base/src/miner_base/matrix_merkle_tree.py b/miner/miner-base/src/miner_base/matrix_merkle_tree.py
+index 07c1010e..f17c2d58 100644
+--- a/miner/miner-base/src/miner_base/matrix_merkle_tree.py
++++ b/miner/miner-base/src/miner_base/matrix_merkle_tree.py
+@@ -23,7 +23,7 @@ class MatrixMerkleTree:
+             raise ValueError(f"Expected 32-byte key, got {len(key)} bytes")
+ 
+         self.tensor_shape = tensor.shape
+-        self._tree = MerkleTree(data=self.pad_tensor(tensor), key=key)
++        self._tree = MerkleTree.from_buffer(tensor.detach().cpu().contiguous().numpy(), key)
+ 
+     @classmethod
+     def tensor_hash(cls, tensor: torch.Tensor, key: bytes) -> bytes:
+diff --git a/miner/miner-base/tests/test_merkle_tree.py b/miner/miner-base/tests/test_merkle_tree.py
+index 4838bd8d..96000fc8 100644
+--- a/miner/miner-base/tests/test_merkle_tree.py
++++ b/miner/miner-base/tests/test_merkle_tree.py
+@@ -146,3 +146,10 @@ class TestMatrixMerkleTreeVsBlake3:
+         expected_root = blake3(padded_tensor_bytes, key=sample_key).digest()
+ 
+         assert tree.root == expected_root, f"Root mismatch for shape {m=}, {n=}"
++
++    def test_root_of_non_contiguous_tensor(self, sample_key):
++        """Test that a transposed view hashes the same as its contiguous copy."""
++        tensor = torch.randint(-128, 127, (300, 700), dtype=torch.int8).T
++        tree = MatrixMerkleTree(tensor, sample_key)
++        expected_root = blake3(tree.pad_tensor(tensor), key=sample_key).digest()
++        assert tree.root == expected_root
+diff --git a/pearl-blake3/src/merkle.rs b/pearl-blake3/src/merkle.rs
+index f389a5da..28b07520 100644
+--- a/pearl-blake3/src/merkle.rs
++++ b/pearl-blake3/src/merkle.rs
+@@ -41,6 +41,11 @@ pub struct MerkleTree {
+ impl MerkleTree {
+     /// Build a Merkle tree from `data` using keyed BLAKE3.
+     pub fn new(data: &[u8], key: Digest) -> Self {
++        Self::from_vec(data.to_vec(), key)
++    }
++
++    /// Build a Merkle tree from an existing buffer.
++    pub fn from_vec(data: Vec<u8>, key: Digest) -> Self {
+         let hasher = Blake3Hasher::with_key(key);
+         if data.is_empty() {
+             return Self {
+@@ -52,15 +57,15 @@ impl MerkleTree {
+ 
+         // Single chunk or less: hash directly
+         if data.len() <= CHUNK_LEN {
+-            let root = hasher.hash(data);
++            let root = hasher.hash(&data);
+             return Self {
+                 key,
+                 layers: vec![vec![root]],
+-                data: data.to_vec(),
++                data,
+             };
+         }
+ 
+-        let chunk_cvs = hasher.hash_chunks(data);
++        let chunk_cvs = hasher.hash_chunks(&data);
+         let mut layers: Vec<Vec<Digest>> = vec![chunk_cvs];
+ 
+         while layers.last().unwrap().len() > 2 {
+@@ -74,11 +79,7 @@ impl MerkleTree {
+             layers.push(vec![root]);
+         }
+ 
+-        Self {
+-            key,
+-            layers,
+-            data: data.to_vec(),
+-        }
++        Self { key, layers, data }
+     }
+ 
+     /// The BLAKE3 key this tree was built with.
+@@ -473,6 +474,17 @@ mod tests {
+         }
+     }
+ 
++    #[test]
++    fn test_from_vec_matches_new() {
++        let key = test_key();
++        for size in [1, 100, 1023, 1025, 2000, 3000, 7777] {
++            let data = test_data(size);
++            let expected = MerkleTree::new(&data, key).root();
++            let tree = MerkleTree::from_vec(data, key);
++            assert_eq!(tree.root(), expected, "Root mismatch for size {size}");
++        }
++    }
++
+     #[test]
+     fn test_leaf_count() {
+         let key = test_key();
+diff --git a/pearl-blake3/src/merkle_py.rs b/pearl-blake3/src/merkle_py.rs
+index eb56e558..75961fce 100644
+--- a/pearl-blake3/src/merkle_py.rs
++++ b/pearl-blake3/src/merkle_py.rs
+@@ -3,10 +3,12 @@
+ //! Provides `#[pymethods]` implementations that extend the pyo3 classes defined in [`merkle`].
+ 
+ use blake3::{CHUNK_LEN, OUT_LEN};
+-use pyo3::{exceptions::PyValueError, pymethods, types::PyBytes, Bound, PyResult, Python};
++use pyo3::{
++    buffer::PyBuffer, exceptions::PyValueError, pymethods, types::PyBytes, Bound, PyResult, Python,
++};
+ 
+ use crate::hasher::Digest;
+-use crate::merkle::{MerkleProof, MerkleTree};
++use crate::merkle::{padded_chunk_len, MerkleProof, MerkleTree};
+ 
+ #[pymethods]
+ impl MerkleTree {
+@@ -23,6 +25,17 @@ impl MerkleTree {
+         Ok(Self::new(data, key))
+     }
+ 
++    #[staticmethod]
++    #[pyo3(name = "from_buffer", signature = (data, key))]
++    fn py_from_buffer(py: Python<'_>, data: PyBuffer<i8>, key: Digest) -> PyResult<Self> {
++        let len = data.item_count();
++        let mut padded = vec![0u8; padded_chunk_len(len)];
++        let target =
++            unsafe { std::slice::from_raw_parts_mut(padded.as_mut_ptr().cast::<i8>(), len) };
++        data.copy_to_slice(py, target)?;
++        Ok(py.allow_threads(|| Self::from_vec(padded, key)))
++    }
++
+     #[getter(root)]
+     fn py_root<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+         PyBytes::new(py, &self.root())
+diff --git a/py-pearl-mining/tests/test_python_api.py b/py-pearl-mining/tests/test_python_api.py
+index c00ab795..58d5af51 100644
+--- a/py-pearl-mining/tests/test_python_api.py
++++ b/py-pearl-mining/tests/test_python_api.py
+@@ -548,3 +548,23 @@ class TestV1NbitsOverride:
+             block_header, plain_proof, nbits_override=HARD_NBITS
+         )
+         assert not is_valid, "v1 verification accepted a proof above the override target"
++
++
++class TestMerkleTreeFromBuffer:
++    """Test MerkleTree.from_buffer against MerkleTree over padded bytes."""
++
++    KEY = b"0123456789abcdef" * 2
++
++    @pytest.mark.parametrize("size", [1, 100, 1023, 1025, 7777])
++    def test_root_matches_padded_bytes(self, size):
++        data = bytes(i % 256 for i in range(size))
++        expected = pearl_mining.MerkleTree(pearl_mining.pad_to_chunk_boundary(data), self.KEY).root
++        tree = pearl_mining.MerkleTree.from_buffer(memoryview(data).cast("b"), self.KEY)
++        assert tree.root == expected
++
++    def test_root_of_non_contiguous_buffer(self):
++        strided = memoryview(bytes(i % 256 for i in range(4096))).cast("b")[::2]
++        expected = pearl_mining.MerkleTree(
++            pearl_mining.pad_to_chunk_boundary(strided.tobytes()), self.KEY
++        ).root
++        assert pearl_mining.MerkleTree.from_buffer(strided, self.KEY).root == expected
