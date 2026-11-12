@@ -6,15 +6,16 @@ a real tensor from the int7 Llama checkpoint.
 """
 
 import base64
-import threading
 
 import numpy as np
 import pytest
 
-from pouw.cpu_prover import prove, random_activations
-from pouw.jobs import JobIssuer, bits_to_target, nbits_for_win_probability, new_job, target_to_bits
-from pouw.rpc import RpcClient
-from pouw.verifier import UnixVerifierServer, Verifier
+from pouw.jobs import JobIssuer, new_job
+from pouw.proof import COLS_PATTERN, ROWS_PATTERN
+from pouw.protocol import RpcClient, stop_server
+from pouw.prover import prove, random_activations, tile_starts
+from pouw.target import bits_for_win_probability, bits_to_target, target_to_bits
+from pouw.verifier import Verifier, VerifierService
 from pouw.weights import DeclaredWeights, fuse_like_vllm
 
 K = 2048  # inner dimension: the library requires at least 16x the noise rank (128)
@@ -38,7 +39,7 @@ def checkpoint():
 
 @pytest.fixture
 def verifier(checkpoint):
-    issuer = JobIssuer(nbits=nbits_for_win_probability(WIN, K), interval_s=60, max_age_s=60)
+    issuer = JobIssuer(nbits=bits_for_win_probability(WIN, K), interval_s=60, max_age_s=60)
     return Verifier(issuer, DeclaredWeights(fuse_like_vllm(checkpoint)))
 
 
@@ -132,8 +133,7 @@ def test_easier_target_than_issued_is_rejected(verifier, checkpoint):
 
 def test_over_the_socket(verifier, checkpoint, tmp_path):
     sock = str(tmp_path / "gw.sock")
-    server = UnixVerifierServer(sock, verifier)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    server = VerifierService(verifier).start(sock)
     try:
         client = RpcClient(sock)
         job_dict = client.call("getMiningInfo")
@@ -144,16 +144,12 @@ def test_over_the_socket(verifier, checkpoint, tmp_path):
         assert result == {"accepted": True, "reason": "ok"}
         client.close()
     finally:
-        server.shutdown()
-        server.server_close()
+        stop_server(server)
 
 
 def test_tiles_cover_each_output_exactly_once():
     # The README's work estimate assumes this: one tile is 2 x 64 outputs, and
     # the tiles of a GEMM partition its output matrix.
-    from pouw.cpu_prover import tile_starts
-    from pouw.jobs import COLS_PATTERN, ROWS_PATTERN
-
     m, n = 256, 4096
     covered = [
         (r + dr, c + dc)

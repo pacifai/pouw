@@ -12,7 +12,7 @@ set -euo pipefail
 
 UPSTREAM_COMMIT="${UPSTREAM_COMMIT:-d7c517d267f10f5bcbbdc366f3e603942f9a5ab5}"
 UPSTREAM_DIR=/opt/upstream
-PATCH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../patches" && pwd)"
+PATCH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../patches" && pwd)"
 
 if ! command -v uv >/dev/null; then
   curl -LsSf https://astral.sh/uv/install.sh | sh

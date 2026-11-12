@@ -6,18 +6,17 @@ one, which is the limit these tests document rather than test around.
 
 import base64
 import json
-import sys
-import threading
 
 import numpy as np
 import pytest
 from safetensors.numpy import save_file
 
-from pouw import cpu_prover
-from pouw.cpu_prover import prove, random_activations
-from pouw.jobs import JobIssuer, nbits_for_win_probability
-from pouw.rpc import RpcClient
-from pouw.verifier import UnixVerifierServer, Verifier
+from pouw.cli import main
+from pouw.jobs import JobIssuer
+from pouw.protocol import RpcClient, stop_server
+from pouw.prover import prove, random_activations
+from pouw.target import bits_for_win_probability
+from pouw.verifier import Verifier, VerifierService
 from pouw.weights import DeclaredWeights
 
 K = 2048
@@ -34,7 +33,7 @@ def checkpoint():
 
 
 def _verifier(checkpoint, attribute_gpus):
-    issuer = JobIssuer(nbits=nbits_for_win_probability(WIN, K), interval_s=60, max_age_s=60)
+    issuer = JobIssuer(nbits=bits_for_win_probability(WIN, K), interval_s=60, max_age_s=60)
     return Verifier(issuer, DeclaredWeights(dict(checkpoint)), attribute_gpus=attribute_gpus)
 
 
@@ -115,18 +114,15 @@ def test_malformed_gpu_id_is_refused(verifier, bad):
         verifier.issue({"gpu_id": bad})
 
 
-def test_cpu_prover_gpu_id_over_the_socket(verifier, checkpoint, tmp_path, monkeypatch, capsys):
+def test_cpu_prover_gpu_id_over_the_socket(verifier, checkpoint, tmp_path):
     weights = tmp_path / "w.safetensors"
     save_file(dict(checkpoint), str(weights))
     sock, log = str(tmp_path / "gw.sock"), tmp_path / "log.jsonl"
-    server = UnixVerifierServer(sock, verifier, log)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    server = VerifierService(verifier, log).start(sock)
     try:
-        argv = ["cpu_prover", "--weights", str(weights), "--matrix", MATRIX, "--socket", sock]
-        monkeypatch.setattr(sys, "argv", [*argv, "--proofs", "1", "--gpu-id", GPU_A])
-        cpu_prover.main()
-        monkeypatch.setattr(sys, "argv", [*argv, "--proofs", "1"])
-        cpu_prover.main()
+        prove_args = ["prove", "--weights", str(weights), "--matrix", MATRIX, "--socket", sock, "--proofs", "1"]
+        main([*prove_args, "--gpu-id", GPU_A])
+        main(prove_args)
 
         # A malformed ID comes back as a JSON-RPC error.
         client = RpcClient(sock)
@@ -136,8 +132,7 @@ def test_cpu_prover_gpu_id_over_the_socket(verifier, checkpoint, tmp_path, monke
         assert base64.b64decode(job["incomplete_header_bytes"]) == verifier.issue({"gpu_id": GPU_B}).header_bytes
         client.close()
     finally:
-        server.shutdown()
-        server.server_close()
+        stop_server(server)
 
     rows = [json.loads(line) for line in log.read_text().splitlines()]
     assert [(r["accepted"], r["gpu_id"]) for r in rows] == [(True, GPU_A), (True, None)]
