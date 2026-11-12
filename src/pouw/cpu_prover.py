@@ -1,11 +1,11 @@
 """A CPU stand-in for the GPU prover, for testing the verifier without a GPU.
 
-It speaks the same JSON-RPC as the upstream vLLM plugin and builds proofs the
-same way (upstream's create_proof). Instead of a GPU kernel hashing every tile during a
-real GEMM, it tries tiles one at a time and asks the library's verify function
-whether each one wins. That is slow, but the proofs it produces are real.
+It speaks the plugin's JSON-RPC and packages proofs the way upstream's
+create_proof does. Instead of hashing every tile during a GPU multiply, it
+tries tiles one at a time and asks the library's verify function whether each
+one wins. That is slow, but its proofs are real.
 
-Options make it misbehave on purpose, so tests can show each check catch it.
+Its options make it cheat, so tests can show each check catching it.
 """
 
 from __future__ import annotations
@@ -14,7 +14,6 @@ import argparse
 import base64
 import json
 import random
-import socket
 import time
 from pathlib import Path
 
@@ -30,35 +29,8 @@ from pearl_mining import (
 from safetensors.numpy import load_file
 
 from .jobs import COLS_PATTERN, NOISE_RANK, ROWS_PATTERN, gpu_proof_config
+from .rpc import RpcClient
 from .weights import fuse_like_vllm, job_key
-
-
-class RpcClient:
-    """Newline-delimited JSON-RPC over a Unix socket or TCP, like upstream's JSONRPCClient."""
-
-    def __init__(self, socket_path: str | None = None, tcp: tuple[str, int] | None = None):
-        if tcp:
-            self._sock = socket.create_connection(tcp)
-        else:
-            self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            self._sock.connect(socket_path)
-        self._r = self._sock.makefile("r", encoding="utf-8")
-        self._w = self._sock.makefile("w", encoding="utf-8")
-        self._id = 0
-
-    def call(self, method: str, params: dict | None = None):
-        self._id += 1
-        self._w.write(json.dumps({"jsonrpc": "2.0", "method": method, "id": self._id, "params": params or {}}) + "\n")
-        self._w.flush()
-        response = json.loads(self._r.readline())
-        if "error" in response:
-            raise RuntimeError(response["error"]["message"])
-        return response["result"]
-
-    def close(self) -> None:
-        self._r.close()
-        self._w.close()
-        self._sock.close()
 
 
 def tile_starts(pattern: list[int], dim: int) -> list[int]:

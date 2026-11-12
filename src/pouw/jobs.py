@@ -1,19 +1,9 @@
-"""Jobs: the verifier's random value, packed into a block header.
+"""Jobs: the verifier's random value, packed into the block header the prover expects.
 
-The prover expects a block header and a difficulty target. The random value
-goes in the header's previous-block-hash field, so every noise seed and tile
-hash the GPU produces depends on it.
-
-With GPU attribution on, each GPU gets its own job: the header's Merkle-root
-field holds a hash of the GPU's ID instead of zeros. The noise seeds and tile
-hashes then differ per GPU, so a proof made under one GPU's job can't pass as
-another's. The other header fields are fixed filler.
-
-The GPU ID is whatever the prover reports, such as the UUID the driver gives.
-Nothing signs it, so a dishonest host can claim any ID, or several IDs for
-one GPU. Attribution therefore says which ID a proof was made for, not which
-physical GPU made it. To bind an ID to real hardware, a later version can
-replace the reported ID with a signed attestation; see NEXT_STEPS.md.
+The random value goes in the header's previous-block-hash field, so every
+noise seed and tile hash the GPU produces depends on it. With GPU attribution
+on, the header's Merkle-root field holds a hash of the GPU's ID, so each GPU's
+noise and tile hashes differ. The other header fields are fixed filler.
 """
 
 from __future__ import annotations
@@ -34,17 +24,17 @@ from pearl_mining import (
     penalized_target_bound,
 )
 
-# The proof format's certificate versions. 3 is the current one: noise seeds are salted
-# with the matrix dimensions. Dense (non-MoE) proofs are valid under all three.
+# The proof format's version. Version 3 salts the noise seeds with the matrix dimensions.
 CERT_VERSION = 3
 
 # The tile pattern and noise rank the GPU prover uses (upstream's MinerSettings).
 NOISE_RANK = 128
 ROWS_PATTERN = [0, 8]
 COLS_PATTERN = [c + d for c in range(0, 256, 8) for d in (0, 1)]
+# Outputs in one tile. Each output is a dot product over the inner dimension k.
+TILE_OUTPUTS = len(ROWS_PATTERN) * len(COLS_PATTERN)
 
-# Prefix for hashing a GPU ID into a header, so the hash can't collide with
-# any other use of BLAKE3 in the proof format.
+# Prefix that keeps a GPU ID's hash apart from every other BLAKE3 hash in the proof format.
 GPU_ID_DOMAIN = b"pouw gpu id"
 # Longest GPU ID the verifier accepts. A UUID string is 40 characters.
 MAX_GPU_ID_LEN = 128
@@ -91,11 +81,7 @@ def gpu_proof_config(k: int) -> MiningConfiguration:
 
 
 def win_probability(target: int, config: MiningConfiguration) -> float:
-    """Chance that one tile hash falls below the prover's target for this config.
-
-    The prover compares each tile hash against the library's rank-adjusted bound, not
-    the raw target, so this is the number to divide wins by to estimate tiles.
-    """
+    """Chance that one tile wins. The library compares tile hashes with a bound adjusted for the noise rank."""
     bound = penalized_target_bound(target, config)
     if bound is None:
         raise ValueError("target is unusable for this configuration")
@@ -116,8 +102,7 @@ class Job:
     nbits: int
     issued_at: float
     cert_version: int = CERT_VERSION
-    # The GPU this job was issued for, as the prover reported it. None for the
-    # shared job. Self-reported and unsigned: see the module docstring.
+    # The GPU ID the prover reported, or None for the shared job.
     gpu_id: str | None = None
 
     @property
@@ -152,22 +137,16 @@ def new_job(nbits: int, now: float | None = None, gpu_id: str | None = None) -> 
 
 @dataclass
 class JobIssuer:
-    """Hands out a fresh job every `interval_s` and remembers recent ones.
+    """Hands out a new job every interval_s, one per GPU ID, and remembers recent ones.
 
-    A proof counts only if its job was issued here and is younger than
-    `max_age_s`. That bounds when the work behind the proof could have happened.
-
-    Each GPU ID has its own current job, refreshed on the same interval. The
-    ID None is the shared job, used when attribution is off or a prover sends
-    no ID.
+    The ID None stands for the shared job, used when attribution is off or a prover sends no ID.
     """
 
     nbits: int
     interval_s: float = 5.0
     max_age_s: float = 15.0
-    # Called with each new job, for example to record it.
     on_new_job: Callable[[Job], None] | None = None
-    # Drop jobs older than 4 * max_age_s. A replay of a recorded session keeps them all.
+    # Forget jobs older than 4 * max_age_s. A replay keeps every recorded job instead.
     forget_old: bool = True
     _jobs: dict[bytes, Job] = field(default_factory=dict)
     _current: dict[str | None, Job] = field(default_factory=dict)
@@ -186,6 +165,10 @@ class JobIssuer:
                 if self.on_new_job is not None:
                     self.on_new_job(job)
             return job
+
+    def remember(self, job: Job) -> None:
+        with self._lock:
+            self._jobs[job.header_bytes] = job
 
     def lookup(self, header_bytes: bytes) -> Job | None:
         with self._lock:

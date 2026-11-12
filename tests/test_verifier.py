@@ -11,8 +11,9 @@ import threading
 import numpy as np
 import pytest
 
-from pouw.cpu_prover import RpcClient, prove, random_activations
-from pouw.jobs import JobIssuer, bits_to_target, new_job, nbits_for_win_probability, target_to_bits
+from pouw.cpu_prover import prove, random_activations
+from pouw.jobs import JobIssuer, bits_to_target, nbits_for_win_probability, new_job, target_to_bits
+from pouw.rpc import RpcClient
 from pouw.verifier import UnixVerifierServer, Verifier
 from pouw.weights import DeclaredWeights, fuse_like_vllm
 
@@ -69,7 +70,9 @@ def test_honest_proof_is_accepted(verifier, checkpoint):
 
 def test_proof_against_fused_tensor_names_it(verifier, checkpoint):
     job, job_dict = _job(verifier)
-    Bt = np.concatenate([checkpoint["model.layers.0.mlp.gate_proj.weight"], checkpoint["model.layers.0.mlp.up_proj.weight"]])
+    Bt = np.concatenate(
+        [checkpoint["model.layers.0.mlp.gate_proj.weight"], checkpoint["model.layers.0.mlp.up_proj.weight"]]
+    )
     verdict = verifier.check(_prove(job, Bt).to_base64(), job_dict)
     assert verdict.accepted, verdict.reason
     assert verdict.weight == "model.layers.0.mlp.gate_up_proj.weight"

@@ -1,26 +1,16 @@
-"""The verifier: stands in for the upstream gateway and checks every winning tile.
+"""The verifier: stands in for the upstream gateway and checks every proof the prover sends.
 
-The prover, the upstream vLLM plugin, talks to a gateway over a local socket
-with two JSON-RPC calls, named by upstream:
+The upstream vLLM plugin asks a gateway for jobs and sends it proofs, over a
+local socket, with two JSON-RPC calls:
 
-- getMiningInfo: the prover asks for the current job (header and target).
-- submitPlainProof: the prover sends a winning tile's proof.
+- getMiningInfo: the prover asks for the current job, a block header and a target.
+- submitPlainProof: the prover sends the proof of one winning tile.
 
-This module answers both. Each job carries a fresh random value. Each proof
-must pass four checks before it counts:
+The verifier answers both. A proof counts only if it passes every check in
+CHECKS, in order.
 
-1. Its job was issued here, recently, with the same target and version.
-2. The library's own verify function accepts it: the tile, recomputed from the
-   opened rows and the noise, hashes below the target.
-3. Its weight matrix is one of the declared model's matrices.
-4. It hasn't been submitted before.
-
-With --attribute-gpus, getMiningInfo accepts {"gpu_id": "<id>"} and each GPU
-ID gets its own job. A proof is credited to the GPU ID of the job it was made
-under, found by its header bytes. The prover can't relabel a proof, because
-the ID is hashed into the header that seeded the noise. A request without a
-gpu_id gets the shared job, and its proofs carry gpu_id None. The ID is
-self-reported and unsigned, so a dishonest host can fake it.
+With attribute_gpus on, getMiningInfo accepts {"gpu_id": "<id>"}, and each
+GPU ID gets its own jobs. The prover reports its own ID, and nothing signs it.
 """
 
 from __future__ import annotations
@@ -36,14 +26,26 @@ from pathlib import Path
 
 from pearl_mining import IncompleteBlockHeader, PlainProof, verify_plain_proof_for_cert_version
 
-from .jobs import MAX_GPU_ID_LEN, Job, JobIssuer, nbits_for_win_probability, win_probability
+from .jobs import MAX_GPU_ID_LEN, TILE_OUTPUTS, Job, JobIssuer, nbits_for_win_probability, win_probability
+from .recording import Recorder, Recording
+from .rpc import answer
 from .weights import DeclaredWeights, config_from_indices, job_key
+
+CHECKS = {
+    "issued_job": "The proof's job was issued by this verifier, with its target and version unchanged",
+    "on_time": "The job is no older than the maximum age",
+    "valid_proof": "Upstream's verify function recomputes the tile from the opened rows and columns, and it wins",
+    "declared_weights": "The weight matrix's Merkle root matches one of the declared model's matrices",
+    "new_tile": "Nobody submitted this tile before",
+}
 
 
 @dataclass
 class Verdict:
     accepted: bool
     reason: str
+    # The check that rejected the proof, a key of CHECKS. None when accepted.
+    check: str | None = None
     job_id: str | None = None
     weight: str | None = None
     m: int | None = None
@@ -51,13 +53,15 @@ class Verdict:
     k: int | None = None
     a_rows: list[int] | None = None
     b_cols: list[int] | None = None
-    # Chance that a single tile hash wins under this job. Summing 1/p over
-    # accepted proofs estimates how many tiles the GPU computed.
     win_probability: float | None = None
+    # Multiply-adds this proof stands for: the tile's work divided by its chance to win.
+    work: float = 0.0
     job_age_s: float | None = None
-    # The GPU ID the proof's job was issued for. None when attribution is off
-    # or the prover sent no ID. Self-reported, so a host can fake it.
     gpu_id: str | None = None
+
+    def reject(self, check: str, reason: str) -> Verdict:
+        self.check, self.reason = check, reason
+        return self
 
 
 class Verifier:
@@ -68,12 +72,22 @@ class Verifier:
         self._seen: set[tuple] = set()
         self._lock = threading.Lock()
 
-    def issue(self, params: dict | None = None, now: float | None = None) -> Job:
-        """The job to answer a getMiningInfo request with.
+    @classmethod
+    def from_recording(cls, recording: Recording, weights: DeclaredWeights) -> Verifier:
+        """A verifier with the recorded settings that knows every recorded job."""
+        s = recording.settings
+        issuer = JobIssuer(
+            nbits=s.get("nbits", recording.jobs[0].nbits if recording.jobs else 0),
+            interval_s=s.get("interval_s", 5.0),
+            max_age_s=s.get("max_age_s", 15.0),
+            forget_old=False,
+        )
+        for job in recording.jobs:
+            issuer.remember(job)
+        return cls(issuer, weights, attribute_gpus=s.get("attribute_gpus", False))
 
-        With attribution off, every request gets the shared job and params are
-        ignored. With it on, a request carrying a gpu_id gets that GPU's job.
-        """
+    def issue(self, params: dict | None = None, now: float | None = None) -> Job:
+        """The job for a getMiningInfo request: the requesting GPU's own, or the shared one."""
         gpu_id = None
         if self.attribute_gpus and isinstance(params, dict):
             gpu_id = params.get("gpu_id")
@@ -87,76 +101,53 @@ class Verifier:
 
         job = self.issuer.lookup(header_bytes)
         if job is None:
-            return Verdict(False, "unknown job: not issued by this verifier")
+            return Verdict(False, "").reject("issued_job", "unknown job: not issued by this verifier")
         v = Verdict(False, "", job_id=job.job_id, job_age_s=now - job.issued_at, gpu_id=job.gpu_id)
         if mining_job.get("target") != job.target or mining_job.get("cert_version") != job.cert_version:
-            v.reason = "job fields differ from what was issued"
-            return v
+            return v.reject("issued_job", "job fields differ from what was issued")
         if now - job.issued_at > self.issuer.max_age_s:
-            v.reason = f"stale job: issued {now - job.issued_at:.1f}s ago"
-            return v
+            return v.reject("on_time", f"stale job: issued {now - job.issued_at:.1f}s ago")
 
         try:
             proof = PlainProof.from_base64(plain_proof_b64)
         except ValueError as e:
-            v.reason = f"malformed proof: {e}"
-            return v
+            return v.reject("valid_proof", f"malformed proof: {e}")
         if proof.moe is not None:
-            v.reason = "MoE proofs are not supported yet"
-            return v
+            return v.reject("valid_proof", "MoE proofs are not supported")
         v.m, v.n, v.k = proof.m, proof.n, proof.k
         v.a_rows, v.b_cols = list(proof.a.row_indices), list(proof.bt.row_indices)
 
-        header = IncompleteBlockHeader.from_bytes(header_bytes)
-        ok, message = verify_plain_proof_for_cert_version(job.cert_version, header, proof)
+        ok, message = verify_plain_proof_for_cert_version(
+            job.cert_version, IncompleteBlockHeader.from_bytes(header_bytes), proof
+        )
         if not ok:
-            v.reason = f"proof verification failed: {message}"
-            return v
+            return v.reject("valid_proof", f"proof verification failed: {message}")
 
         config = config_from_indices(proof.k, proof.noise_rank, v.a_rows, v.b_cols)
-        weight = self.weights.match(job_key(header_bytes, config), proof.n, proof.k, bytes(proof.bt.root))
-        if weight is None:
-            v.reason = "weight matrix is not one of the declared model's matrices"
-            return v
-        v.weight = weight
+        v.weight = self.weights.match(job_key(header_bytes, config), proof.n, proof.k, bytes(proof.bt.root))
+        if v.weight is None:
+            return v.reject("declared_weights", "weight matrix is not one of the declared model's matrices")
 
-        fingerprint = (header_bytes, bytes(proof.a.root), bytes(proof.bt.root), tuple(v.a_rows), tuple(v.b_cols))
+        tile = (header_bytes, bytes(proof.a.root), bytes(proof.bt.root), tuple(v.a_rows), tuple(v.b_cols))
         with self._lock:
-            if fingerprint in self._seen:
-                v.reason = "duplicate: this tile was already submitted"
-                return v
-            self._seen.add(fingerprint)
+            if tile in self._seen:
+                return v.reject("new_tile", "duplicate: this tile was already submitted")
+            self._seen.add(tile)
 
         v.win_probability = win_probability(job.target, config)
+        v.work = TILE_OUTPUTS * proof.k / v.win_probability
         v.accepted, v.reason = True, "ok"
         return v
 
 
 class _Handler(socketserver.StreamRequestHandler):
-    """Newline-delimited JSON-RPC, matching upstream's JSONRPCClient."""
-
     def handle(self) -> None:
-        server: _Server = self.server  # type: ignore[assignment]
-        for line in self.rfile:
-            if not line.strip():
-                continue
-            request_id = None
-            try:
-                request = json.loads(line)
-                request_id = request.get("id")
-                result = server.dispatch(request["method"], request.get("params") or {})
-                response = {"jsonrpc": "2.0", "result": result, "id": request_id}
-            except Exception as e:  # report every failure to the caller, as the upstream gateway does
-                response = {"jsonrpc": "2.0", "error": {"code": -32000, "message": str(e)}, "id": request_id}
-            self.wfile.write((json.dumps(response) + "\n").encode())
-            self.wfile.flush()
+        answer(self.rfile, self.wfile, self.server.dispatch)  # type: ignore[attr-defined]
 
 
 class _Server:
-    verifier: Verifier
-    log_path: Path | None
-    # A recording.Recorder, or None. Set after construction.
-    recorder = None
+    def setup_verifier(self, verifier: Verifier, log_path: Path | None, recorder: Recorder | None) -> None:
+        self.verifier, self.log_path, self.recorder = verifier, log_path, recorder
 
     def dispatch(self, method: str, params: dict) -> dict:
         if method == "getMiningInfo":
@@ -180,66 +171,55 @@ class _Server:
 class UnixVerifierServer(_Server, socketserver.ThreadingUnixStreamServer):
     daemon_threads = True
 
-    def __init__(self, socket_path: str, verifier: Verifier, log_path: Path | None = None):
+    def __init__(
+        self, socket_path: str, verifier: Verifier, log_path: Path | None = None, recorder: Recorder | None = None
+    ):
         Path(socket_path).unlink(missing_ok=True)
         super().__init__(socket_path, _Handler)
-        self.verifier, self.log_path = verifier, log_path
+        self.setup_verifier(verifier, log_path, recorder)
 
 
 class TcpVerifierServer(_Server, socketserver.ThreadingTCPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, host: str, port: int, verifier: Verifier, log_path: Path | None = None):
+    def __init__(
+        self, host: str, port: int, verifier: Verifier, log_path: Path | None = None, recorder: Recorder | None = None
+    ):
         super().__init__((host, port), _Handler)
-        self.verifier, self.log_path = verifier, log_path
+        self.setup_verifier(verifier, log_path, recorder)
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="Stand in for the upstream gateway and check every winning tile.")
-    p.add_argument("--weights", nargs="+", type=Path, required=True, help="safetensors files with the declared int8 weights")
-    p.add_argument("--socket", default="/tmp/pearlgw.sock", help="Unix socket path (upstream's default)")
-    p.add_argument("--tcp", metavar="HOST:PORT", help="listen on TCP instead of a Unix socket")
-    p.add_argument("--win-probability", type=float, default=1e-4, help="target chance that one tile hash wins")
-    p.add_argument("--k", type=int, default=4096, help="inner dimension the difficulty is tuned for")
-    p.add_argument("--interval", type=float, default=5.0, help="seconds between fresh random values")
-    p.add_argument("--max-age", type=float, default=15.0, help="oldest job a proof may use, in seconds")
-    p.add_argument("--log", type=Path, help="append one JSON line per submission here")
+    p = argparse.ArgumentParser(description="Stand in for the upstream gateway and check every proof.")
     p.add_argument(
-        "--record",
-        type=Path,
-        help="append every issued job and every submitted proof here, so the session can be replayed",
+        "--weights", nargs="+", type=Path, required=True, help="safetensors files with the declared int8 weights"
     )
     p.add_argument(
-        "--attribute-gpus",
-        action="store_true",
-        help="give each GPU ID sent in getMiningInfo its own job, and record it on each proof "
-        "(the ID is self-reported and unsigned, so a host can fake it)",
+        "--socket", default="/tmp/pearlgw.sock", help="Unix socket the plugin connects to (upstream's default)"
+    )
+    p.add_argument("--tcp", metavar="HOST:PORT", help="listen on TCP instead of a Unix socket")
+    p.add_argument("--win-probability", type=float, default=1e-4, help="chance that one tile wins")
+    p.add_argument("--k", type=int, default=4096, help="inner dimension the target is set for")
+    p.add_argument("--interval", type=float, default=5.0, help="seconds between new jobs")
+    p.add_argument("--max-age", type=float, default=15.0, help="oldest job a proof may use, in seconds")
+    p.add_argument("--log", type=Path, help="append one JSON line per verdict here")
+    p.add_argument("--record", type=Path, help="append every job and every submitted proof here, for replay")
+    p.add_argument(
+        "--attribute-gpus", action="store_true", help="give each GPU ID its own jobs (the ID is self-reported)"
     )
     args = p.parse_args()
 
-    if args.log:
-        args.log.parent.mkdir(parents=True, exist_ok=True)
+    for path in (args.log, args.record):
+        if path:
+            path.parent.mkdir(parents=True, exist_ok=True)
     weights = DeclaredWeights.from_safetensors(args.weights)
     nbits = nbits_for_win_probability(args.win_probability, args.k)
     issuer = JobIssuer(nbits=nbits, interval_s=args.interval, max_age_s=args.max_age)
     recorder = None
     if args.record:
-        from .recording import Recorder
-
-        args.record.parent.mkdir(parents=True, exist_ok=True)
         recorder = Recorder(args.record)
-        recorder._write(
-            {
-                "type": "settings",
-                "nbits": nbits,
-                "interval_s": args.interval,
-                "max_age_s": args.max_age,
-                "attribute_gpus": args.attribute_gpus,
-                "win_probability": args.win_probability,
-                "k": args.k,
-            }
-        )
+        recorder.settings(issuer, args.attribute_gpus, args.win_probability)
         issuer.on_new_job = recorder.job
     verifier = Verifier(issuer, weights, attribute_gpus=args.attribute_gpus)
     attribution = "on" if args.attribute_gpus else "off"
@@ -247,10 +227,9 @@ def main() -> None:
 
     if args.tcp:
         host, port = args.tcp.rsplit(":", 1)
-        server: _Server = TcpVerifierServer(host, int(port), verifier, args.log)
+        server: _Server = TcpVerifierServer(host, int(port), verifier, args.log, recorder)
     else:
-        server = UnixVerifierServer(args.socket, verifier, args.log)
-    server.recorder = recorder
+        server = UnixVerifierServer(args.socket, verifier, args.log, recorder)
     print(f"listening on {args.tcp or args.socket}", flush=True)
     server.serve_forever()  # type: ignore[attr-defined]
 

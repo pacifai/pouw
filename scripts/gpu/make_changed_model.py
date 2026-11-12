@@ -8,7 +8,7 @@ from the declared one, so the verifier should reject each proof at the
 weight check.
 
 Example:
-    /opt/upstream/.venv/bin/python scripts/gpu/make_substituted_model.py /root/model /root/model-sub
+    /opt/upstream/.venv/bin/python scripts/gpu/make_changed_model.py /root/model /root/model-changed
 """
 
 import shutil
