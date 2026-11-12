@@ -1,0 +1,53 @@
+diff --git a/miner/vllm-miner/src/vllm_miner/config.py b/miner/vllm-miner/src/vllm_miner/config.py
+index 67be285..17153f0 100755
+--- a/miner/vllm-miner/src/vllm_miner/config.py
++++ b/miner/vllm-miner/src/vllm_miner/config.py
+@@ -1,4 +1,7 @@
++import atexit
++import json
+ import os
++import time
+ from typing import Any
+ 
+ import yaml
+@@ -40,8 +43,38 @@ class Config:
+         min_n = config["min_n"]
+         min_k = config["min_k"]
+         if (n == 1) or (k == 1) or (m == 1):
+-            return False
+-        return (m >= min_m) and (n >= min_n) and (k >= min_k)
++            noisy = False
++        else:
++            noisy = (m >= min_m) and (n >= min_n) and (k >= min_k)
++        if _shape_log is not None:
++            _shape_log.add(m, n, k, noisy)
++        return noisy
++
++
++class _ShapeLog:
++    """Buffers one line per GEMM shape decision and appends them to a file."""
++
++    def __init__(self, path: str) -> None:
++        self.path = path
++        self.rows: list[tuple] = []
++        atexit.register(self.flush)
++
++    def add(self, m: int, n: int, k: int, noisy: bool) -> None:
++        self.rows.append((time.time(), m, n, k, noisy))
++        if len(self.rows) >= 4096:
++            self.flush()
++
++    def flush(self) -> None:
++        if not self.rows:
++            return
++        rows, self.rows = self.rows, []
++        with open(self.path, "a") as f:
++            for t, m, n, k, noisy in rows:
++                f.write(json.dumps({"time": t, "m": m, "n": n, "k": k, "noisy": noisy}) + "\n")
++
++
++# Set MINER_LOG_GEMM_SHAPES to a file path to log every shape decision.
++_shape_log = _ShapeLog(os.environ["MINER_LOG_GEMM_SHAPES"]) if os.environ.get("MINER_LOG_GEMM_SHAPES") else None
+ 
+ 
+ # Create a singleton instance
