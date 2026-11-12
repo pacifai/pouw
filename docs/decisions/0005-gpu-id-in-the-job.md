@@ -1,4 +1,4 @@
-# ADR 0005: Each GPU's ID is hashed into its own jobs, and the ID is self-reported
+# 0005: Self-reported GPU ID in each job
 
 **Status:** accepted
 
@@ -38,7 +38,7 @@ The ID is the UUID the driver reports. Nothing signs it.
 
 ## Alternatives considered
 
-- **A signed ID from the GPU's attestation.** An H100 can sign a report over a
+- A signed ID from the GPU's attestation. An H100 can sign a report over a
   verifier's nonce, but only in confidential computing mode, inside a
   confidential virtual machine. Even then, it shows that a genuine GPU answered,
   not which GPU did the work. Open.

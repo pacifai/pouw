@@ -1,11 +1,7 @@
-"""The declared model's weights, and the check that a proof used them.
+"""The declared model's weights, and the check that a proof used one of them.
 
-A proof commits to the full weight matrix B through a Merkle root: a
-keyed hash over all of B's bytes. The key depends on the job, so the root
-changes with every random value the verifier issues. To check that a proof
-multiplied with a declared weight matrix, the verifier recomputes that
-matrix's root under the same key and compares. This covers every byte of the
-matrix, not only the rows the winning tile opened.
+A proof commits to its whole weight matrix through a Merkle root keyed by the
+job, so a matching root covers every byte of the matrix.
 """
 
 from __future__ import annotations
@@ -15,40 +11,17 @@ import threading
 from pathlib import Path
 
 import numpy as np
-from blake3 import blake3
-from pearl_mining import (
-    MerkleTree,
-    MiningConfiguration,
-    MMAType,
-    PeriodicPattern,
-)
+from pearl_mining import MerkleTree
 from safetensors import safe_open
 
-# vLLM stores some projections as one fused tensor: rows of the parts stacked in
-# this order. The GEMM, and so the proof, sees the fused tensor.
+# Projections vLLM fuses into one tensor, with the parts' rows stacked in this order.
 FUSED = {
     "self_attn.qkv_proj": ["self_attn.q_proj", "self_attn.k_proj", "self_attn.v_proj"],
     "mlp.gate_up_proj": ["mlp.gate_proj", "mlp.up_proj"],
 }
+# Room for many GPUs, each with a few live jobs and matrix shapes.
+CACHED_JOB_SHAPES = 1024
 _LAYER = re.compile(r"^(model\.layers\.\d+)\.(.+)\.weight$")
-
-
-def config_from_indices(k: int, rank: int, rows: list[int], cols: list[int]) -> MiningConfiguration:
-    """Rebuild the proof configuration a proof's tile indices imply (as upstream does)."""
-    r0, c0 = min(rows), min(cols)
-    return MiningConfiguration(
-        common_dim=k,
-        rank=rank,
-        mma_type=MMAType.Int7xInt7ToInt32,
-        rows_pattern=PeriodicPattern.from_list([r - r0 for r in rows]),
-        cols_pattern=PeriodicPattern.from_list([c - c0 for c in cols]),
-        moe=None,
-    )
-
-
-def job_key(header_bytes: bytes, config: MiningConfiguration) -> bytes:
-    """The key the proof format uses for every Merkle tree in a job."""
-    return blake3(header_bytes + bytes(config.to_bytes())).digest()
 
 
 def merkle_root(matrix: np.ndarray, key: bytes) -> bytes:
@@ -90,26 +63,16 @@ class DeclaredWeights:
         return cls(fuse_like_vllm(tensors) if fuse else tensors)
 
     def match(self, key: bytes, n: int, k: int, root: bytes) -> str | None:
-        """Name of the declared (n, k) matrix whose root under `key` is `root`, if any.
-
-        Roots are computed once per job and shape, then reused for every proof
-        in that job.
-        """
+        """Name of the declared (n, k) matrix whose root under key is root, if any."""
         cache_key = (key, n, k)
         with self._lock:
             roots = self._roots.get(cache_key)
             if roots is None:
                 roots = {merkle_root(t, key): name for name, t in self.tensors.items() if t.shape == (n, k)}
                 self._roots[cache_key] = roots
-                self._forget_old_jobs(keep=cache_key)
+                self._forget_old_jobs()
         return roots.get(root)
 
-    # Each entry is one job and matrix shape, holding one 32-byte root per
-    # matrix. With GPU attribution on, every GPU has its own jobs, so the
-    # limit leaves room for many GPUs, each with a few live jobs and shapes.
-    def _forget_old_jobs(self, keep: tuple[bytes, int, int], limit: int = 1024) -> None:
-        while len(self._roots) > limit:
-            oldest = next(iter(self._roots))
-            if oldest == keep:
-                break
-            del self._roots[oldest]
+    def _forget_old_jobs(self) -> None:
+        while len(self._roots) > CACHED_JOB_SHAPES:
+            del self._roots[next(iter(self._roots))]

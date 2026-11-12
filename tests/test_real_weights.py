@@ -2,7 +2,7 @@
 
 Needs data/llama-sample.safetensors. To create it, run:
 
-    python scripts/fetch_tensors.py data/llama-sample.safetensors \
+    python -m pouw fetch-tensors data/llama-sample.safetensors \
         model.layers.0.self_attn.o_proj.weight \
         model.layers.20.self_attn.q_proj.weight \
         model.layers.20.self_attn.k_proj.weight \
@@ -14,13 +14,14 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from pouw.cpu_prover import prove, random_activations
-from pouw.jobs import JobIssuer, nbits_for_win_probability
+from pouw.jobs import JobIssuer
+from pouw.prover import prove, random_activations
+from pouw.target import bits_for_win_probability
 from pouw.verifier import Verifier
 from pouw.weights import DeclaredWeights
 
 SAMPLE = Path(__file__).parent.parent / "data" / "llama-sample.safetensors"
-pytestmark = pytest.mark.skipif(not SAMPLE.exists(), reason="run scripts/fetch_tensors.py first")
+pytestmark = pytest.mark.skipif(not SAMPLE.exists(), reason="run python -m pouw fetch-tensors first")
 
 
 @pytest.fixture(scope="module")
@@ -30,7 +31,7 @@ def weights():
 
 @pytest.fixture
 def verifier(weights):
-    return Verifier(JobIssuer(nbits=nbits_for_win_probability(1 / 50, 4096), interval_s=60, max_age_s=60), weights)
+    return Verifier(JobIssuer(nbits=bits_for_win_probability(1 / 50, 4096), interval_s=60, max_age_s=60), weights)
 
 
 def test_checkpoint_weights_fit_the_int7_range(weights):

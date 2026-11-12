@@ -1,4 +1,4 @@
-# ADR 0003: The verifier recomputes the Merkle root of every declared weight matrix for each job
+# 0003: Merkle root check on every declared weight matrix
 
 **Status:** accepted
 
@@ -40,8 +40,8 @@ its root equals one of them.
 
 ## Alternatives considered
 
-- **Check only the opened columns against the declared matrix.** Much cheaper,
-  but blind to the rest of the matrix. Combined with full checks on a sample of
+- Check only the opened columns against the declared matrix. Much cheaper,
+  but misses changes elsewhere in the matrix. Combined with full checks on a sample of
   jobs, it is an open option.
-- **Hash the weights for the next job before issuing it.** It hides the cost
+- Hash the weights for the next job before issuing it. It hides the cost
   without reducing it. Also open.

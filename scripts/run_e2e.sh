@@ -5,30 +5,28 @@
 # Runs on the pod after setup_pod.sh. It starts the verifier on the socket the
 # plugin connects to, starts vLLM, sends long prompts (the plugin only runs
 # the noisy multiply on batches of at least 1,024 tokens), and then stops both.
-# Logs go to /root/pouw/runs/<label>/.
+# Logs go to $RUNS/<label>/, by default /root/pouw/runs/<label>/.
 #
 # Usage:
-#   bash scripts/gpu/run_e2e.sh                    # noisy multiply, proofs on
-#   NO_MINING=1 bash scripts/gpu/run_e2e.sh        # plain multiply, for comparison
-#   WIN=1e-8 PROMPTS=400 bash scripts/gpu/run_e2e.sh
-#   RECORD=1 ATTRIBUTE=1 SHAPES=1 RATE=3 bash scripts/gpu/run_e2e.sh
+#   bash scripts/run_e2e.sh                    # noisy multiply, proofs on
+#   NO_MINING=1 bash scripts/run_e2e.sh        # plain multiply, for comparison
+#   WIN=1e-8 PROMPTS=400 bash scripts/run_e2e.sh
+#   RECORD=1 ATTRIBUTE=1 SHAPES=1 RATE=3 bash scripts/run_e2e.sh
 #
-# RECORD=1 saves every job and proof for replay (pouw.recording), ATTRIBUTE=1
+# RECORD=1 saves every job and proof for the session file, ATTRIBUTE=1
 # turns on GPU attribution on both sides, SHAPES=1 logs every int7 GEMM's
 # shape (patches/0003), and RATE sets requests per second (default: all at
-# once). RELAY=1 puts pouw.cheat_relay between the plugin and the verifier,
+# once). RELAY=1 puts the cheat relay between the plugin and the verifier,
 # with RELAY_ARGS passed to it. VERIFY_WEIGHTS sets the checkpoint the
 # verifier declares, if it differs from the one vLLM serves. DESCRIPTION and
-# both checkpoints go into run.json, which pouw.session reads. RUNS sets the
+# both checkpoints go into run.json, which the session file reads. RUNS sets the
 # folder that holds the run's folder.
 set -euo pipefail
 
 MODEL="${MODEL:-/root/model}"
 UPSTREAM=/opt/upstream
 PY="$UPSTREAM/.venv/bin/python"
-# The verifier can run in its own environment, so a session can swap the
-# plugin's proof library without changing the verifier's.
-VERIFIER_PY="${VERIFIER_PY:-$PY}"
+POUW="env PYTHONPATH=/root/pouw/src $PY -m pouw"
 WIN="${WIN:-1e-8}"
 PROMPTS="${PROMPTS:-200}"
 INPUT_LEN="${INPUT_LEN:-2048}"
@@ -59,7 +57,7 @@ rm -f "$SOCKET" /tmp/verifier.sock  # a socket file left by an earlier run would
 verifier_args=()
 [ "$RECORD" = 1 ] && verifier_args+=(--record "$OUT/recording.jsonl")
 [ "$ATTRIBUTE" = 1 ] && verifier_args+=(--attribute-gpus)
-PYTHONPATH=/root/pouw/src "$VERIFIER_PY" -m pouw.verifier --socket "$VERIFIER_SOCKET" --weights "$VERIFY_WEIGHTS"/*.safetensors \
+$POUW verify --socket "$VERIFIER_SOCKET" --weights "$VERIFY_WEIGHTS"/*.safetensors \
   --win-probability "$WIN" --log "$OUT/verifier.jsonl" "${verifier_args[@]}" > "$OUT/verifier.out" 2>&1 &
 pids+=($!)
 for _ in $(seq 1 600); do grep -q "^listening" "$OUT/verifier.out" 2>/dev/null && break; sleep 1; done
@@ -68,7 +66,7 @@ head -2 "$OUT/verifier.out"
 if [ "$RELAY" = 1 ]; then
   echo "== cheat relay"
   # shellcheck disable=SC2086  # RELAY_ARGS is a list of flags
-  PYTHONPATH=/root/pouw/src "$VERIFIER_PY" -m pouw.cheat_relay --listen "$SOCKET" --upstream "$VERIFIER_SOCKET" \
+  $POUW relay --listen "$SOCKET" --verifier "$VERIFIER_SOCKET" \
     --log "$OUT/cheats.jsonl" $RELAY_ARGS > "$OUT/relay.out" 2>&1 &
   pids+=($!)
   for _ in $(seq 1 60); do grep -q "^listening" "$OUT/relay.out" 2>/dev/null && break; sleep 1; done
@@ -112,9 +110,5 @@ for _ in $(seq 1 180); do
   sleep 1
 done
 echo "== verifier log"
-if [ -s "$OUT/verifier.jsonl" ]; then
-  "$PY" /root/pouw/scripts/summarize_log.py "$OUT/verifier.jsonl"
-else
-  echo "no submissions"
-fi
+$POUW summarize "$OUT/verifier.jsonl"
 echo "exception lines in vllm.log: $(grep -ciE "traceback|exception" "$OUT/vllm.log" || true)"

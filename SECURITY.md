@@ -1,30 +1,43 @@
 # Security policy
 
-pouw is a research prototype. Only the latest commit on `main` is supported.
+## Supported versions
 
-## Report a vulnerability
+pouw is a research prototype. Only the latest commit on `main` receives
+security fixes.
 
-Report privately through GitHub: open the repository's **Security** tab and
-select **Report a vulnerability**. Don't open a public issue for it.
+## Reporting a vulnerability
 
-Include what you found, how to reproduce it, and what it lets an attacker do.
-A maintainer replies within a week.
+Do not report security vulnerabilities through public GitHub issues. Report
+them privately through the repository's **Security** tab, using **Report a
+vulnerability**.
 
-## What counts
+Include the following:
 
-- **A way to get credit for work the GPU didn't do.** For example, a proof that
+1. A description of the issue and its impact.
+2. The affected component and commit.
+3. Step-by-step instructions to reproduce it, including any proofs, messages,
+   or scripts needed.
+4. The expected and the observed behavior.
+
+A maintainer acknowledges the report within one week and keeps you informed
+until it is resolved.
+
+## Scope
+
+In scope:
+
+- Obtaining credit for work the GPU did not perform, for example a proof that
   passes all five checks without the multiplication it claims, a proof counted
   twice, or a proof made with weights other than the declared ones.
-- **A bug in the verifier** that a remote party can trigger, such as a crash
-  from a crafted message.
+- Verifier bugs that a remote party can trigger, such as a crash from a
+  crafted message.
 
-Some limits are already known. These aren't vulnerabilities, and you can
-discuss them in public issues:
+Out of scope, and open for discussion in public issues:
 
-- The verifier trusts whoever connects to its socket.
-- A proof doesn't show that its activations came from real requests.
+- The verifier trusts every client that connects to its socket.
+- A proof does not show that its activations came from real requests.
 - The GPU reports its own ID, and nothing signs it.
 - The open questions in [NEXT_STEPS.md](NEXT_STEPS.md).
 
-Weaknesses in upstream's proof scheme or kernels belong with
-[upstream](https://github.com/pearl-research-labs/pearl).
+Report weaknesses in upstream's proof scheme or kernels to
+[upstream](https://github.com/pearl-research-labs/pearl/security).
