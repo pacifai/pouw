@@ -179,12 +179,12 @@ def record(args):
             fail(f"pod {pod_id} never answered over ssh", 2)
         ship(conn)
         say("building upstream and downloading the model")
-        if conn.run(f"bash {POD_REPO}/scripts/gpu/setup_pod.sh", warn=True, timeout=SETUP_TIMEOUT_S).exited != 0:
+        if conn.run(f"bash {POD_REPO}/scripts/setup_pod.sh", warn=True, timeout=SETUP_TIMEOUT_S).exited != 0:
             fail("setup_pod.sh failed (see above)", 3)
         say("recording")
         shapes = " --shapes" if args.shapes else ""
         recorded = conn.run(
-            f"bash {POD_REPO}/scripts/gpu/record_session.sh {POD_SESSION}{shapes}", warn=True, timeout=RECORD_TIMEOUT_S
+            f"bash {POD_REPO}/scripts/record_session.sh {POD_SESSION}{shapes}", warn=True, timeout=RECORD_TIMEOUT_S
         )
         session = fetch(conn, stamp)
     finally:

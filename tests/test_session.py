@@ -2,19 +2,20 @@
 
 import base64
 import json
-import threading
 import time
 
 import numpy as np
 from safetensors.numpy import save_file
 
-from pouw.cheat_relay import CHEATS, Relay, serve
-from pouw.cpu_prover import prove, random_activations
-from pouw.jobs import JobIssuer, nbits_for_win_probability
-from pouw.recording import Recorder
-from pouw.rpc import RpcClient
-from pouw.session import FORMAT, export, proven_share
-from pouw.verifier import UnixVerifierServer, Verifier
+from pouw.cheats import CHEATS, all_cheats
+from pouw.cheats.relay import Relay
+from pouw.jobs import JobIssuer
+from pouw.protocol import RpcClient, stop_server
+from pouw.prover import prove, random_activations
+from pouw.record.recorder import Recorder
+from pouw.record.session import FORMAT, build, proven_share
+from pouw.target import bits_for_win_probability
+from pouw.verifier import Verifier, VerifierService
 from pouw.weights import DeclaredWeights
 
 K = 2048
@@ -38,18 +39,15 @@ def _run_dir(path, model, declared, description):
 
 def _record(run_dir, Bt_declared, Bt_served, relay_every=None):
     weights = DeclaredWeights({NAME: Bt_declared})
-    nbits = nbits_for_win_probability(1 / 50, K)
-    recorder = Recorder(run_dir / "recording.jsonl")
-    issuer = JobIssuer(nbits=nbits, interval_s=1, max_age_s=2, on_new_job=recorder.job)
-    recorder.settings(issuer, True, 1 / 50)
+    issuer = JobIssuer(nbits=bits_for_win_probability(1 / 50, K), interval_s=1, max_age_s=2)
+    service = VerifierService(Verifier(issuer, weights, attribute_gpus=True))
+    Recorder(run_dir / "recording.jsonl").attach(service, 1 / 50)
     vsock, rsock = str(run_dir / "v.sock"), str(run_dir / "r.sock")
-    server = UnixVerifierServer(vsock, Verifier(issuer, weights, attribute_gpus=True), recorder=recorder)
+    server = service.start(vsock)
     relay_server = None
     if relay_every:
-        relay_server = serve(
-            Relay(vsock, run_dir / "cheats.jsonl", every=relay_every, start_after=0, max_age_s=2), rsock
-        )
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+        relay = Relay(vsock, run_dir / "cheats.jsonl", all_cheats(max_age_s=2), every=relay_every, start_after=0)
+        relay_server = relay.start(rsock)
     (run_dir / "serving_since").write_text(str(time.time()))
     try:
         client = RpcClient(rsock if relay_every else vsock)
@@ -64,9 +62,8 @@ def _record(run_dir, Bt_declared, Bt_served, relay_every=None):
         client.close()
     finally:
         if relay_server:
-            relay_server.shutdown()
-        server.shutdown()
-        server.server_close()
+            stop_server(relay_server)
+        stop_server(server)
 
 
 def test_session_marks_every_cheat_with_the_check_that_caught_it(tmp_path):
@@ -83,7 +80,7 @@ def test_session_marks_every_cheat_with_the_check_that_caught_it(tmp_path):
     changed_model = _run_dir(tmp_path / "changed-model", tmp_path / "changed", declared, "A changed model")
     _record(changed_model, Bt, changed)
 
-    session = export([relay, changed_model], gpu="CPU")
+    session = build([relay, changed_model], gpu="CPU")
     assert session["format"] == FORMAT
     relay_run, changed_run = session["runs"]
 
