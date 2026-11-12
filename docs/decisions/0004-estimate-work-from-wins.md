@@ -1,4 +1,4 @@
-# ADR 0004: Proven work is estimated from the accepted proofs and their chance to win
+# 0004: Work estimate from accepted proofs
 
 **Status:** accepted
 

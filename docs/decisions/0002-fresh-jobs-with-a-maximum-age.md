@@ -1,4 +1,4 @@
-# ADR 0002: Every job carries a fresh random value and expires after 15 seconds
+# 0002: Fresh jobs with a 15-second maximum age
 
 **Status:** accepted
 
@@ -38,8 +38,8 @@ check (5 of 5).
 
 ## Alternatives considered
 
-- **A longer maximum age.** It would forgive a slow verifier but give a
+- A longer maximum age. It would forgive a slow verifier but give a
   cheater more time to do work early.
-- **A random value per proof, sent by the verifier on request.** The plugin
+- A random value per proof, sent by the verifier on request. The plugin
   asks for jobs on its own schedule, so this would need a larger change to
   upstream.

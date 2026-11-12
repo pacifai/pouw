@@ -1,4 +1,4 @@
-# ADR 0001: The verifier replaces upstream's gateway and leaves the proof format alone
+# 0001: Verifier in place of upstream's gateway
 
 **Status:** accepted
 
@@ -34,7 +34,7 @@ function.
 
 ## Alternatives considered
 
-- **Write a prover from the paper.** Rejected: it would take GPU kernels pouw
+- Write a prover from the paper. Rejected: it would take GPU kernels pouw
   doesn't have, and its soundness would rest on new code.
-- **Fork upstream and change the plugin freely.** Rejected: every difference
+- Fork upstream and change the plugin freely. Rejected: every difference
   from upstream weakens the claim that the proofs are upstream's.

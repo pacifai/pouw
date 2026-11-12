@@ -1,33 +1,52 @@
 # Contributing
 
-This guide covers where things are, how to build and test, and the rules that
-keep results trustworthy. For what pouw is, start with the
-[README](README.md).
+This guide covers the repository layout, the build and tests, and the rules
+for changes. The [README](README.md) describes what pouw is.
 
 ## Layout
 
+The `pouw` package has three parts. The core is the verifier and an honest
+CPU prover. `pouw.cheats` and `pouw.record` build the demo's runs on top of
+it, and the core never imports them.
+
 | Path | Contents |
 |---|---|
-| `src/pouw/verifier.py` | The verifier: the five checks, and the JSON-RPC server that stands in for upstream's gateway |
-| `src/pouw/jobs.py` | Jobs: the verifier's random value in a block header, and the target's chance to win |
-| `src/pouw/weights.py` | The declared weights, fused the way vLLM holds them, and their Merkle roots |
-| `src/pouw/cpu_prover.py` | A CPU stand-in for the GPU, for tests |
-| `src/pouw/cheat_relay.py` | A relay between the GPU and the verifier that sends cheated copies of real proofs |
-| `src/pouw/recording.py` | Records every job and proof of a run, so it can be checked again later |
-| `src/pouw/session.py` | Checks recorded runs again and writes them into one session file |
-| `src/pouw/rpc.py` | The newline-delimited JSON-RPC that upstream's plugin speaks |
-| `tests/` | The tests |
-| `scripts/fetch_tensors.py` | Downloads single tensors from a checkpoint on Hugging Face |
-| `scripts/summarize_log.py` | Counts a verifier log's verdicts and the work they imply |
-| `scripts/gpu/` | Run on the pod: setup, one end-to-end run, the session's three runs, and the changed model |
-| `runpod/record.py` | Rents an H100, records a session there, and releases it |
-| `patches/` | The changes this repository makes to upstream's code |
+| `src/pouw/cli.py` | The single entry point, `python -m pouw <command>` |
+| `src/pouw/verifier.py` | The five checks, and the service that answers the plugin's calls |
+| `src/pouw/jobs.py` | Jobs and the issuer that hands them out |
+| `src/pouw/weights.py` | The declared weights, fused as vLLM holds them, and their Merkle roots |
+| `src/pouw/proof.py` | The GPU prover's tile pattern and noise rank, and the job key |
+| `src/pouw/target.py` | The target's compact encoding and a tile's chance to win |
+| `src/pouw/protocol.py` | The JSON-RPC client and server shared by the verifier and the relay |
+| `src/pouw/prover.py` | The CPU prover |
+| `src/pouw/summary.py` | Verdict counts and estimated work from a verifier log |
+| `src/pouw/checkpoint.py` | Downloads single tensors from a checkpoint on Hugging Face |
+| `src/pouw/cheats/` | One class per cheat, and the relay that sends them |
+| `src/pouw/record/` | The recorder, the session file, and the changed model |
+| `tests/` | Tests |
+| `scripts/` | Shell scripts for the GPU host: setup, one run, and a session's three runs |
+| `runpod/record.py` | Rents an H100, records a session, and releases the pod |
+| `patches/` | Changes to upstream's code |
 | `docker/` | The image that builds upstream's proof library and runs the tests |
-| `docs/decisions/` | The decision records behind the design and its claims |
+| `docs/decisions/` | Architecture decision records |
+
+## Commands
+
+| Command | Action |
+|---|---|
+| `verify` | Issue jobs and check every proof |
+| `prove` | Send proofs from the CPU prover |
+| `relay` | Pass calls to the verifier, and send cheated copies of real proofs |
+| `session` | Check recorded runs again and write the session file |
+| `summarize` | Count a verifier log's verdicts and the work they imply |
+| `fetch-tensors` | Download single tensors from a Hugging Face checkpoint |
+| `changed-model` | Copy a checkpoint with one weight changed in every int8 matrix |
+
+`python -m pouw <command> --help` lists each command's options.
 
 ## Build and test
 
-Everything that doesn't need a GPU runs in Docker:
+Everything except the GPU runs in Docker:
 
 ```bash
 docker build -t pouw-local -f docker/Dockerfile .
@@ -35,57 +54,51 @@ docker run --rm -v "$PWD":/work pouw-local python -m pytest -q
 ```
 
 `tests/test_real_weights.py` needs four tensors from the real checkpoint and
-skips itself without them. The README's quickstart fetches them.
+skips itself without them. The README's commands fetch them.
 
-To run the verifier and the CPU stand-in as separate processes, inside the
+To run the verifier and the CPU prover as separate processes inside the
 image:
 
 ```bash
-python -m pouw.verifier --weights data/llama-sample.safetensors --win-probability 0.02 --log runs/local.jsonl &
-python -m pouw.cpu_prover --weights data/llama-sample.safetensors \
+python -m pouw verify --weights data/llama-sample.safetensors --win-probability 0.02 --log runs/local.jsonl &
+python -m pouw prove --weights data/llama-sample.safetensors \
   --matrix model.layers.0.self_attn.o_proj.weight --proofs 3
 ```
 
 ### GPU
 
-Upstream's kernels need a Hopper GPU, such as an H100, on a host whose driver
+Upstream's kernels require a Hopper GPU, such as an H100, and a driver that
 supports CUDA 13. `uv run runpod/record.py` rents one and runs everything. To
-work on a pod by hand, copy this repository to `/root/pouw`, then:
+work on a pod by hand, copy the repository to `/root/pouw` and run:
 
 ```bash
-bash /root/pouw/scripts/gpu/setup_pod.sh     # builds upstream and downloads the model
-bash /root/pouw/scripts/gpu/run_e2e.sh       # one run: the verifier, vLLM, and a benchmark
+bash /root/pouw/scripts/setup_pod.sh     # builds upstream and downloads the model
+bash /root/pouw/scripts/run_e2e.sh       # one run: the verifier, vLLM, and a benchmark
 ```
 
-`run_e2e.sh` takes its settings from environment variables, listed at its top.
-For example, `NO_MINING=1` runs plain inference, and
-`MINER_SKIP_BLOCK_SUBMISSION=true` runs the noisy multiplication without
-sending proofs. The first run on a pod compiles kernels, so don't compare its
-time with later runs.
+`run_e2e.sh` reads its settings from environment variables, listed at its top.
+`NO_MINING=1` runs plain inference, and `MINER_SKIP_BLOCK_SUBMISSION=true`
+runs the noisy multiplication without sending proofs. The first run on a pod
+compiles kernels, so its time is not comparable with later runs.
 
 ## Rules
 
-- **Change upstream's code only through `patches/`.** This repository replaces
-  upstream's gateway. Any other change to upstream's code is a `git diff`
-  against the pinned commit, saved in `patches/` with a numbered name and
-  explained in `patches/README.md`. Keep patches small, and don't change the
-  proof format or the verify function.
-- **Move the upstream pin on purpose.** `docker/Dockerfile` and
-  `scripts/gpu/setup_pod.sh` build one upstream commit. To move it, change both,
-  check that every patch still applies, and rerun the tests.
-- **Name upstream only as the source.** Credit Pearl Research Labs in the
-  README, and call their code *upstream* everywhere else, or say what the part
-  is: the plugin, the gateway, the verify function.
-- **Say prover, not miner.** The GPU that does the work is the prover. Keep
-  mining terms only in upstream names you can't change, such as
-  `getMiningInfo`.
-- **Version the session file.** The demo site reads it. When its shape changes,
-  change `FORMAT` in `src/pouw/session.py`.
-- **Keep data out of git.** Checkpoint tensors go in `data/`, run logs in
-  `runs/`, and session files in `results/`. Git ignores all three.
-- **Compare within a session.** Pods differ in speed, so times don't carry
-  between them.
-- **Report what you measure.** A cheat that passes is a finding. Report
-  negative or mixed results plainly.
-- **Keep `NEXT_STEPS.md` to open work.** When an item ships, delete it there and
-  record the result in the README or a decision record.
+- Change upstream's code only through `patches/`. Each change is a `git diff`
+  against the pinned commit, saved with a numbered name and described in
+  `patches/README.md`. Keep patches small, and leave the proof format and the
+  verify function unchanged.
+- Move the upstream pin deliberately. `docker/Dockerfile` and
+  `scripts/setup_pod.sh` build the same commit. To move it, change both, check
+  that every patch applies, and rerun the tests.
+- Credit Pearl Research Labs in the README only. Elsewhere, call their code
+  *upstream*, or name the part: the plugin, the gateway, the verify function.
+- Use *prover*, not *miner*, for the GPU that does the work. Mining terms stay
+  only in upstream names, such as `getMiningInfo`.
+- Version the session file. The demo site reads it, so change `FORMAT` in
+  `src/pouw/record/session.py` whenever its shape changes.
+- Keep data out of git: checkpoint tensors in `data/`, run logs in `runs/`,
+  and session files in `results/`.
+- Compare times only within one session. Pods differ in speed.
+- Report results as measured, including cheats that pass and mixed results.
+- When an item in `NEXT_STEPS.md` ships, delete it there and record the result
+  in the README or a decision record.
