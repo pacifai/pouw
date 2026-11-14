@@ -78,6 +78,19 @@ def test_proof_against_fused_tensor_names_it(verifier, checkpoint):
     assert verdict.weight == "model.layers.0.mlp.gate_up_proj.weight"
 
 
+def test_smaller_tile_is_credited_its_own_work(verifier, checkpoint):
+    # 2 rows by 16 columns: 32 outputs, the smallest tile the library accepts and a quarter
+    # of the GPU prover's. Its chance to win is a quarter too, so crediting it as a full
+    # tile would count four times the work.
+    small_cols = [c + d for c in range(0, 64, 8) for d in (0, 1)]
+    job, job_dict = _job(verifier)
+    Bt = checkpoint["model.layers.1.self_attn.o_proj.weight"]
+    verdict = verifier.check(_prove(job, Bt, cols_pattern=small_cols).to_base64(), job_dict)
+    assert verdict.accepted, verdict.reason
+    assert len(verdict.a_rows) * len(verdict.b_cols) == 32
+    assert verdict.work == pytest.approx(32 * K / verdict.win_probability)
+
+
 def test_one_changed_weight_is_rejected(verifier, checkpoint):
     # The library's verify passes (the proof is consistent with the matrix the prover
     # used), but that matrix is not the declared one.

@@ -28,9 +28,9 @@ from pearl_mining import (
 )
 from safetensors.numpy import load_file
 
-from .jobs import COLS_PATTERN, NOISE_RANK, ROWS_PATTERN, gpu_proof_config
+from .jobs import COLS_PATTERN, NOISE_RANK, ROWS_PATTERN
 from .rpc import RpcClient
-from .weights import fuse_like_vllm, job_key
+from .weights import config_from_indices, fuse_like_vllm, job_key
 
 
 def tile_starts(pattern: list[int], dim: int) -> list[int]:
@@ -58,23 +58,26 @@ def prove(
     max_tiles: int = 100_000,
     want_win: bool = True,
     seed: int | None = None,
+    rows_pattern: list[int] = ROWS_PATTERN,
+    cols_pattern: list[int] = COLS_PATTERN,
 ) -> tuple[PlainProof | None, int]:
     """Try tiles of A·B until one wins (or, with want_win=False, until one loses).
 
+    The tile has rows_pattern's rows and cols_pattern's columns; the defaults are the GPU prover's.
     Returns the proof and the number of tiles tried.
     """
     m, k = A.shape
     n, _ = Bt.shape
-    key = job_key(header_bytes, gpu_proof_config(k))
+    key = job_key(header_bytes, config_from_indices(k, NOISE_RANK, rows_pattern, cols_pattern))
     tree_a = MerkleTree.from_buffer(np.ascontiguousarray(A), key)
     tree_b = MerkleTree.from_buffer(np.ascontiguousarray(Bt), key)
     header = IncompleteBlockHeader.from_bytes(header_bytes)
 
-    tiles = [(r, c) for r in tile_starts(ROWS_PATTERN, m) for c in tile_starts(COLS_PATTERN, n)]
+    tiles = [(r, c) for r in tile_starts(rows_pattern, m) for c in tile_starts(cols_pattern, n)]
     random.Random(seed).shuffle(tiles)
     for tried, (r, c) in enumerate(tiles[:max_tiles], start=1):
-        rows = [r + d for d in ROWS_PATTERN]
-        cols = [c + d for d in COLS_PATTERN]
+        rows = [r + d for d in rows_pattern]
+        cols = [c + d for d in cols_pattern]
         proof = build_proof(A, Bt, rows, cols, tree_a, tree_b)
         ok, _ = verify_plain_proof_for_cert_version(cert_version, header, proof)
         if ok == want_win:

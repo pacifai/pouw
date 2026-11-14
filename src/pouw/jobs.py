@@ -31,8 +31,6 @@ CERT_VERSION = 3
 NOISE_RANK = 128
 ROWS_PATTERN = [0, 8]
 COLS_PATTERN = [c + d for c in range(0, 256, 8) for d in (0, 1)]
-# Outputs in one tile. Each output is a dot product over the inner dimension k.
-TILE_OUTPUTS = len(ROWS_PATTERN) * len(COLS_PATTERN)
 
 # Prefix that keeps a GPU ID's hash apart from every other BLAKE3 hash in the proof format.
 GPU_ID_DOMAIN = b"pouw gpu id"

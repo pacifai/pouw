@@ -26,7 +26,7 @@ from pathlib import Path
 
 from pearl_mining import IncompleteBlockHeader, PlainProof, verify_plain_proof_for_cert_version
 
-from .jobs import MAX_GPU_ID_LEN, TILE_OUTPUTS, Job, JobIssuer, nbits_for_win_probability, win_probability
+from .jobs import MAX_GPU_ID_LEN, Job, JobIssuer, nbits_for_win_probability, win_probability
 from .recording import Recorder, Recording
 from .rpc import answer
 from .weights import DeclaredWeights, config_from_indices, job_key
@@ -135,7 +135,8 @@ class Verifier:
             self._seen.add(tile)
 
         v.win_probability = win_probability(job.target, config)
-        v.work = TILE_OUTPUTS * proof.k / v.win_probability
+        # Each output in the tile is a dot product over k.
+        v.work = len(v.a_rows) * len(v.b_cols) * proof.k / v.win_probability
         v.accepted, v.reason = True, "ok"
         return v
 
