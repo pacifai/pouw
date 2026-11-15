@@ -17,7 +17,8 @@
 # turns on GPU attribution on both sides, SHAPES=1 logs every int7 GEMM's
 # shape (patches/0003), and RATE sets requests per second (default: all at
 # once). RELAY=1 puts the cheat relay between the plugin and the verifier,
-# with RELAY_ARGS passed to it. VERIFY_WEIGHTS sets the checkpoint the
+# with RELAY_ARGS passed to it. MAX_AGE sets the oldest job a proof may use,
+# in seconds, for both the verifier and the relay. VERIFY_WEIGHTS sets the checkpoint the
 # verifier declares, if it differs from the one vLLM serves. DESCRIPTION and
 # both checkpoints go into run.json, which the session file reads. RUNS sets the
 # folder that holds the run's folder.
@@ -38,6 +39,7 @@ SHAPES="${SHAPES:-0}"
 RATE="${RATE:-inf}"
 RELAY="${RELAY:-0}"
 RELAY_ARGS="${RELAY_ARGS:-}"
+MAX_AGE="${MAX_AGE:-}"
 VERIFY_WEIGHTS="${VERIFY_WEIGHTS:-$MODEL}"
 LABEL="${LABEL:-$([ "$NO_MINING" = 1 ] && echo plain || echo noisy)-$(date +%H%M%S)}"
 OUT="${RUNS:-/root/pouw/runs}/$LABEL"
@@ -54,7 +56,9 @@ trap cleanup EXIT
 echo "== verifier (win probability $WIN)"
 VERIFIER_SOCKET=$([ "$RELAY" = 1 ] && echo /tmp/verifier.sock || echo "$SOCKET")
 rm -f "$SOCKET" /tmp/verifier.sock  # a socket file left by an earlier run would look ready
-verifier_args=()
+max_age_args=()
+[ -n "$MAX_AGE" ] && max_age_args=(--max-age "$MAX_AGE")
+verifier_args=("${max_age_args[@]}")
 [ "$RECORD" = 1 ] && verifier_args+=(--record "$OUT/recording.jsonl")
 [ "$ATTRIBUTE" = 1 ] && verifier_args+=(--attribute-gpus)
 $POUW verify --socket "$VERIFIER_SOCKET" --weights "$VERIFY_WEIGHTS"/*.safetensors \
@@ -72,7 +76,7 @@ if [ "$RELAY" = 1 ]; then
   echo "== cheat relay"
   # shellcheck disable=SC2086  # RELAY_ARGS is a list of flags
   $POUW relay --listen "$SOCKET" --verifier "$VERIFIER_SOCKET" \
-    --log "$OUT/cheats.jsonl" $RELAY_ARGS > "$OUT/relay.out" 2>&1 &
+    --log "$OUT/cheats.jsonl" "${max_age_args[@]}" $RELAY_ARGS > "$OUT/relay.out" 2>&1 &
   pids+=($!)
   relay_pid=$!
   for _ in $(seq 1 60); do
