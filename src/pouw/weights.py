@@ -30,15 +30,14 @@ def merkle_root(matrix: np.ndarray, key: bytes) -> bytes:
 
 
 def fuse_like_vllm(tensors: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
-    """Replace each complete group of int8 parts with the fused tensor vLLM builds."""
-    out = dict(tensors)
+    """Replace each complete group of int8 parts with the fused tensor vLLM builds, in place."""
     layers = {m.group(1) for name in tensors if (m := _LAYER.match(name))}
     for layer in sorted(layers):
         for fused, parts in FUSED.items():
             names = [f"{layer}.{p}.weight" for p in parts]
-            if all(n in out for n in names):
-                out[f"{layer}.{fused}.weight"] = np.concatenate([out.pop(n) for n in names], axis=0)
-    return out
+            if all(n in tensors for n in names):
+                tensors[f"{layer}.{fused}.weight"] = np.concatenate([tensors.pop(n) for n in names], axis=0)
+    return tensors
 
 
 class DeclaredWeights:
@@ -67,8 +66,9 @@ class DeclaredWeights:
         cache_key = (key, n, k)
         with self._lock:
             roots = self._roots.get(cache_key)
-            if roots is None:
-                roots = {merkle_root(t, key): name for name, t in self.tensors.items() if t.shape == (n, k)}
+        if roots is None:
+            roots = {merkle_root(t, key): name for name, t in self.tensors.items() if t.shape == (n, k)}
+            with self._lock:
                 self._roots[cache_key] = roots
                 self._forget_old_jobs()
         return roots.get(root)

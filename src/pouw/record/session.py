@@ -41,6 +41,9 @@ def build(run_dirs: list[Path], gpu: str | None, weights: list[Path] | None = No
         model = _read_json(run_dir / "run.json")["declared_model"]
         if model not in declared:
             declared[model] = DeclaredWeights.from_safetensors(weights or sorted(Path(model).glob("*.safetensors")))
+            if not declared[model].tensors:
+                source = "the --weights files" if weights else f"{model}, the declared model in {run_dir / 'run.json'}"
+                raise ValueError(f"no int8 weights in {source}; pass the declared model's files with --weights")
         runs.append(build_run(run_dir, declared[model]))
     return {
         "format": FORMAT,

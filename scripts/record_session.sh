@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Record the demo's three runs on this pod, then write them into one session file.
 #
-# Runs on the pod after setup_pod.sh, in about 30 minutes:
+# Runs on the pod after setup_pod.sh, in about 30 minutes. A short warm-up run
+# compiles the kernels first, and its results are discarded. Then the three runs:
 #   honest         the plugin and the verifier, nothing in between
 #   relay          the cheat relay sends a cheated copy after every eighth honest proof
 #   changed-model  vLLM serves a copy of the model with one weight changed per int8 matrix,
@@ -14,7 +15,7 @@
 # --shapes logs every int7 GEMM's shape (patches/0003), and the session file
 # then holds each run's proven share. Exit: 0 every run recorded, 1 a run failed.
 set -uo pipefail
-cd "$(dirname "$0")/../.."
+cd "$(dirname "$0")/.."
 
 OUT="$1"
 SHAPES=$([ "${2:-}" = --shapes ] && echo 1 || echo 0)
@@ -32,6 +33,10 @@ run() {
   fi
   grep -E "submissions:|Benchmark duration" "$RUNS-$label.log" | sed 's/^/   /'
 }
+
+echo "== $(date +%T) warm-up"
+LABEL=warm-up PROMPTS=8 bash scripts/run_e2e.sh > "$RUNS-warm-up.log" 2>&1 || echo "   FAILED; see $RUNS-warm-up.log"
+rm -rf "${RUNS:?}/warm-up"
 
 run honest DESCRIPTION="The prover sends every proof unchanged"
 run relay RELAY=1 RELAY_ARGS="--every 8 --start-after 4" \

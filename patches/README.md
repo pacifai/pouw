@@ -7,8 +7,12 @@ check out that commit and apply every `*.patch` file in name order before
 building.
 
 To change a patch, check out the pinned commit, apply the existing patches,
-edit the code, and save the result with `git diff > patches/<name>.patch`.
-When the pin moves, check that each patch still applies, and rerun the tests.
+and edit the code. Then save only the files that patch changes, with
+`git diff -- <its paths> > patches/<name>.patch`. A diff of the whole tree
+would also hold the other patches, and `git apply patches/*.patch` would then
+fail. Patch 0001 is the `release-gil-in-proofs` branch of the `pacifai/pearl`
+fork: regenerate it there with `git diff <pinned commit> HEAD`. When the pin
+moves, check that each patch still applies, and rerun the tests.
 
 ## 0001-release-gil-in-proof-trees.patch
 
@@ -39,9 +43,9 @@ tests are in the fork.
 
 ## 0002-send-gpu-id.patch
 
-Lets the vLLM plugin send its GPU's UUID in `getMiningInfo`, so a verifier
-started with `--attribute-gpus` gives each GPU its own jobs. It is off by
-default; set `MINER_SEND_GPU_ID=true` to enable it. The patch changes three
+Lets the vLLM plugin send its GPU's UUID, the unique ID the driver assigns
+each GPU, in `getMiningInfo`, so a verifier started with `--attribute-gpus`
+gives each GPU its own jobs. It is off by default; set `MINER_SEND_GPU_ID=true` to enable it. The patch changes three
 files in `miner/miner-base` and is independent of 0001.
 
 The plugin reads the current CUDA device's UUID on its first GEMM (a general
@@ -49,6 +53,11 @@ matrix multiplication), on the thread that runs it, and sends it from the
 next job update, within about a second. Proofs before then use the shared
 job and carry no GPU ID. With several GPUs, each worker process reports its
 own.
+
+Several GPUs work only when each serves a whole copy of the model. With
+tensor parallelism, each GPU holds a slice of each matrix, so its proofs'
+Merkle roots match no declared matrix, and honest proofs fail the
+declared-weights check.
 
 The UUID is whatever the driver reports, and nothing signs it, so a dishonest
 host can fake it. Upstream's own gateway rejects the extra parameter, so use
@@ -58,9 +67,9 @@ this setting only with this repository's verifier.
 
 Lets the vLLM plugin's `should_use_noisy_gemm` log each decision. When
 `MINER_LOG_GEMM_SHAPES` names a file, the plugin appends one JSON line per
-int7 GEMM: the time, `m`, `n`, `k`, and whether the noisy multiply ran. It
-buffers lines and writes them 4,096 at a time. Without the variable, it does
-nothing.
+int7 GEMM, a multiplication of 7-bit integers: the time, `m`, `n`, `k`, and
+whether the noisy multiply ran. It buffers lines and writes them 4,096 at a
+time. Without the variable, it does nothing.
 
 Proofs cover only the batches that used the noisy multiply. The share of
 int7 GEMM work that earned proofs also needs the batches under `min_m` that
