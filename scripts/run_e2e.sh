@@ -60,7 +60,12 @@ verifier_args=()
 $POUW verify --socket "$VERIFIER_SOCKET" --weights "$VERIFY_WEIGHTS"/*.safetensors \
   --win-probability "$WIN" --log "$OUT/verifier.jsonl" "${verifier_args[@]}" > "$OUT/verifier.out" 2>&1 &
 pids+=($!)
-for _ in $(seq 1 600); do grep -q "^listening" "$OUT/verifier.out" 2>/dev/null && break; sleep 1; done
+verifier_pid=$!
+for _ in $(seq 1 600); do
+  grep -q "^listening" "$OUT/verifier.out" 2>/dev/null && break
+  kill -0 "$verifier_pid" 2>/dev/null || break
+  sleep 1
+done
 grep -q "^listening" "$OUT/verifier.out" || { echo "verifier never started listening"; tail "$OUT/verifier.out"; exit 1; }
 head -2 "$OUT/verifier.out"
 if [ "$RELAY" = 1 ]; then
@@ -69,7 +74,12 @@ if [ "$RELAY" = 1 ]; then
   $POUW relay --listen "$SOCKET" --verifier "$VERIFIER_SOCKET" \
     --log "$OUT/cheats.jsonl" $RELAY_ARGS > "$OUT/relay.out" 2>&1 &
   pids+=($!)
-  for _ in $(seq 1 60); do grep -q "^listening" "$OUT/relay.out" 2>/dev/null && break; sleep 1; done
+  relay_pid=$!
+  for _ in $(seq 1 60); do
+    grep -q "^listening" "$OUT/relay.out" 2>/dev/null && break
+    kill -0 "$relay_pid" 2>/dev/null || break
+    sleep 1
+  done
   grep -q "^listening" "$OUT/relay.out" || { echo "relay never started listening"; tail "$OUT/relay.out"; exit 1; }
 fi
 
