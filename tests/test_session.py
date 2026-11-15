@@ -5,6 +5,7 @@ import json
 import time
 
 import numpy as np
+import pytest
 from safetensors.numpy import save_file
 
 from pouw.cheats import CHEATS, all_cheats
@@ -109,3 +110,9 @@ def test_proven_share_counts_only_work_after_serving_started(tmp_path):
     shapes.write_text("\n".join(json.dumps(r) for r in rows))
     assert proven_share(shapes, since=2.0) == 0.5
     assert proven_share(tmp_path / "missing.jsonl", since=0) is None
+
+
+def test_missing_declared_weights_are_an_error(tmp_path):
+    run = _run_dir(tmp_path / "honest", "/root/model", "/root/model", "Downloaded from a pod")
+    with pytest.raises(ValueError, match="--weights"):
+        build([run], gpu="CPU")
