@@ -43,7 +43,7 @@ LABEL="${LABEL:-$([ "$NO_MINING" = 1 ] && echo plain || echo noisy)-$(date +%H%M
 OUT="${RUNS:-/root/pouw/runs}/$LABEL"
 SOCKET=/tmp/pearlgw.sock
 mkdir -p "$OUT"
-printf '{"description": "%s", "model": "%s", "declared_model": "%s"}\n' \
+"$PY" -c 'import json, sys; print(json.dumps(dict(zip(["description", "model", "declared_model"], sys.argv[1:]))))' \
   "${DESCRIPTION:-$LABEL}" "$MODEL" "$VERIFY_WEIGHTS" > "$OUT/run.json"
 export PATH="$UPSTREAM/.venv/bin:/usr/local/cuda/bin:$PATH"
 
