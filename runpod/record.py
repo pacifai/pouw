@@ -154,10 +154,7 @@ def ship(conn):
 
 
 def fetch(conn, stamp):
-    """Downloads the session file and the raw runs. Returns the session file's path."""
-    SESSIONS.mkdir(parents=True, exist_ok=True)
-    session = SESSIONS / f"{stamp}.json"
-    conn.get(POD_SESSION, str(session))
+    """Downloads the raw runs and logs, then the session file. Returns the session file's path, or None."""
     runs = ROOT / "runs" / stamp
     runs.mkdir(parents=True, exist_ok=True)
     conn.run("tar czf /root/runs.tar.gz -C /root runs runs-*.log", hide=True)
@@ -165,6 +162,14 @@ def fetch(conn, stamp):
     with tarfile.open(runs / "runs.tar.gz") as tar:
         tar.extractall(runs, filter="data")
     (runs / "runs.tar.gz").unlink()
+    SESSIONS.mkdir(parents=True, exist_ok=True)
+    session = SESSIONS / f"{stamp}.json"
+    try:
+        conn.get(POD_SESSION, str(session))
+    except Exception as err:
+        session.unlink(missing_ok=True)
+        print(f"no session file ({err}); rebuild it from {runs.relative_to(ROOT)} with python -m pouw session")
+        return None
     return session
 
 
@@ -190,6 +195,8 @@ def record(args):
     finally:
         terminate(pod_id)
     say("recorded")
+    if session is None:
+        fail("the session file is missing (see above)", 3)
     print(f"  {session.relative_to(ROOT)}")
     if recorded.exited != 0:
         fail("a run failed and is missing from the session (see above)", 3)
