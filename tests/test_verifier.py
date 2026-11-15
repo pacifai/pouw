@@ -40,7 +40,7 @@ def checkpoint():
 @pytest.fixture
 def verifier(checkpoint):
     issuer = JobIssuer(nbits=bits_for_win_probability(WIN, K), interval_s=60, max_age_s=60)
-    return Verifier(issuer, DeclaredWeights(fuse_like_vllm(checkpoint)))
+    return Verifier(issuer, DeclaredWeights(fuse_like_vllm(dict(checkpoint))))
 
 
 def _job(verifier):
