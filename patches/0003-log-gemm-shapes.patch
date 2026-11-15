@@ -1,5 +1,5 @@
 diff --git a/miner/vllm-miner/src/vllm_miner/config.py b/miner/vllm-miner/src/vllm_miner/config.py
-index 67be285..17153f0 100755
+index 67be2850..06e8661d 100755
 --- a/miner/vllm-miner/src/vllm_miner/config.py
 +++ b/miner/vllm-miner/src/vllm_miner/config.py
 @@ -1,4 +1,7 @@
@@ -20,7 +20,7 @@ index 67be285..17153f0 100755
 +        else:
 +            noisy = (m >= min_m) and (n >= min_n) and (k >= min_k)
 +        if _shape_log is not None:
-+            _shape_log.add(m, n, k, noisy)
++            _shape_log.add(m, n, k, noisy and not self.settings.no_mining)
 +        return noisy
 +
 +
