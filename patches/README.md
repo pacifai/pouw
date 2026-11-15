@@ -7,8 +7,12 @@ check out that commit and apply every `*.patch` file in name order before
 building.
 
 To change a patch, check out the pinned commit, apply the existing patches,
-edit the code, and save the result with `git diff > patches/<name>.patch`.
-When the pin moves, check that each patch still applies, and rerun the tests.
+and edit the code. Then save only the files that patch changes, with
+`git diff -- <its paths> > patches/<name>.patch`. A diff of the whole tree
+would also hold the other patches, and `git apply patches/*.patch` would then
+fail. Patch 0001 is the `release-gil-in-proofs` branch of the `pacifai/pearl`
+fork: regenerate it there with `git diff <pinned commit> HEAD`. When the pin
+moves, check that each patch still applies, and rerun the tests.
 
 ## 0001-release-gil-in-proof-trees.patch
 

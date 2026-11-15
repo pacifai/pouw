@@ -159,7 +159,8 @@ answers.
 A session file holds every proof of each recorded run, checked again by the
 verifier, with the check that rejected it and the cheat behind it. The
 [demo site](https://pacifai.github.io/compute-verification-demo/) replays one.
-`python -m pouw session` writes one from recorded runs.
+`python -m pouw session` writes one from recorded runs. For runs downloaded
+from a pod, pass the declared model's safetensors files with `--weights`.
 
 ## Security
 
