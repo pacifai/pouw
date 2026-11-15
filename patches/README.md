@@ -50,6 +50,11 @@ next job update, within about a second. Proofs before then use the shared
 job and carry no GPU ID. With several GPUs, each worker process reports its
 own.
 
+Several GPUs work only when each serves a whole copy of the model. With
+tensor parallelism, each GPU holds a slice of each matrix, so its proofs'
+Merkle roots match no declared matrix, and honest proofs fail the
+declared-weights check.
+
 The UUID is whatever the driver reports, and nothing signs it, so a dishonest
 host can fake it. Upstream's own gateway rejects the extra parameter, so use
 this setting only with this repository's verifier.

@@ -122,6 +122,12 @@ Two cheats pass. Both are known limits:
 - A fake GPU ID. With `--attribute-gpus`, each GPU gets its own jobs, so a
   proof counts for one GPU. The GPU reports its own ID, and nothing signs it.
 
+One honest setup fails. With tensor parallelism, vLLM splits each matrix
+across several GPUs, and each GPU's proofs commit to its slice. Their Merkle
+roots match no declared matrix, so honest proofs fail the declared-weights
+check. Upstream accepts them because it doesn't check which weights a proof
+used.
+
 ## Results
 
 Measured on rented NVIDIA H100 SXM GPUs serving
