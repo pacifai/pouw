@@ -87,7 +87,7 @@ def test_one_changed_weight_is_rejected(verifier, checkpoint):
     Bt[100, 200] = Bt[100, 200] + 1 if Bt[100, 200] < 63 else Bt[100, 200] - 1
     verdict = verifier.check(_prove(job, Bt).to_base64(), job_dict)
     assert not verdict.accepted
-    assert verdict.reason.startswith("weight matrix is not")
+    assert verdict.check == "declared_weights"
 
 
 def test_losing_tile_is_rejected(verifier, checkpoint):
@@ -95,6 +95,7 @@ def test_losing_tile_is_rejected(verifier, checkpoint):
     Bt = checkpoint["model.layers.0.self_attn.o_proj.weight"]
     verdict = verifier.check(_prove(job, Bt, want_win=False).to_base64(), job_dict)
     assert not verdict.accepted
+    assert verdict.check == "valid_proof"
     assert verdict.reason.startswith("proof verification failed")
 
 
@@ -104,7 +105,7 @@ def test_replayed_proof_is_rejected(verifier, checkpoint):
     assert verifier.check(proof, job_dict).accepted
     verdict = verifier.check(proof, job_dict)
     assert not verdict.accepted
-    assert verdict.reason.startswith("duplicate")
+    assert verdict.check == "new_tile"
 
 
 def test_job_not_issued_here_is_rejected(verifier, checkpoint):
@@ -112,6 +113,7 @@ def test_job_not_issued_here_is_rejected(verifier, checkpoint):
     proof = _prove(job, checkpoint["model.layers.0.self_attn.o_proj.weight"]).to_base64()
     verdict = verifier.check(proof, job.to_dict())
     assert not verdict.accepted
+    assert verdict.check == "issued_job"
     assert verdict.reason.startswith("unknown job")
 
 
@@ -120,7 +122,7 @@ def test_stale_job_is_rejected(verifier, checkpoint):
     proof = _prove(job, checkpoint["model.layers.0.self_attn.o_proj.weight"]).to_base64()
     verdict = verifier.check(proof, job_dict, now=job.issued_at + verifier.issuer.max_age_s + 1)
     assert not verdict.accepted
-    assert verdict.reason.startswith("stale job")
+    assert verdict.check == "on_time"
 
 
 def test_easier_target_than_issued_is_rejected(verifier, checkpoint):
@@ -128,6 +130,7 @@ def test_easier_target_than_issued_is_rejected(verifier, checkpoint):
     proof = _prove(job, checkpoint["model.layers.0.self_attn.o_proj.weight"]).to_base64()
     verdict = verifier.check(proof, {**job_dict, "target": job.target * 2})
     assert not verdict.accepted
+    assert verdict.check == "issued_job"
     assert verdict.reason.startswith("job fields differ")
 
 
