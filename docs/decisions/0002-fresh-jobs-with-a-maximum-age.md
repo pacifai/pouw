@@ -30,9 +30,10 @@ check (5 of 5).
 ## Consequences
 
 - Work behind an accepted proof happened at most 15 seconds before it arrived.
-- A slow verifier makes honest proofs late. The plugin waits for each verdict
-  before it sends the next proof, so when the verifier falls behind, proofs
-  queue. In one recorded run, 33 honest proofs failed the on-time check this way.
+- A slow verifier makes honest proofs late. The plugin sends each proof from
+  a thread pool, over its own connection, so many proofs arrive at once. When
+  the verifier answers them slowly, the later ones age past the limit. In one
+  recorded run, 33 honest proofs failed the on-time check this way.
 - The verifier keeps every job for a while, and every tile it accepted, in
   memory.
 
