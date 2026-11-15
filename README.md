@@ -134,8 +134,8 @@ Measured on rented NVIDIA H100 SXM GPUs serving
 `pearl-ai/Llama-3.1-8B-Instruct-pearl`, a Llama 3.1 8B checkpoint with 7-bit
 integer weights. Times are comparable only within one session.
 
-Cost, for 200 prompts of 2,048 tokens sent at once (median of four runs, one
-session):
+Cost, for 200 prompts of 2,048 tokens sent at once (median of four runs, in
+the session of 2026-11-10):
 
 | Setup | Time |
 |---|---:|
@@ -150,8 +150,9 @@ the estimate's expected spread of about 7%.
 
 Coverage: only layers stored as 7-bit integers use the noisy multiplication,
 about 67% of the model's multiply-adds, and the plugin skips batches under
-1,024 tokens. In H100 runs, 97% of the 7-bit work earned proofs with
-2,048-token prompts, and 40% with 256-token prompts and 512-token answers.
+1,024 tokens. In H100 runs on 2026-10-11, 97% of the 7-bit work earned
+proofs with 2,048-token prompts, and 40% with 256-token prompts and 512-token
+answers.
 
 ## Session files
 

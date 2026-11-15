@@ -39,9 +39,9 @@ tests are in the fork.
 
 ## 0002-send-gpu-id.patch
 
-Lets the vLLM plugin send its GPU's UUID in `getMiningInfo`, so a verifier
-started with `--attribute-gpus` gives each GPU its own jobs. It is off by
-default; set `MINER_SEND_GPU_ID=true` to enable it. The patch changes three
+Lets the vLLM plugin send its GPU's UUID, the unique ID the driver assigns
+each GPU, in `getMiningInfo`, so a verifier started with `--attribute-gpus`
+gives each GPU its own jobs. It is off by default; set `MINER_SEND_GPU_ID=true` to enable it. The patch changes three
 files in `miner/miner-base` and is independent of 0001.
 
 The plugin reads the current CUDA device's UUID on its first GEMM (a general
@@ -63,9 +63,9 @@ this setting only with this repository's verifier.
 
 Lets the vLLM plugin's `should_use_noisy_gemm` log each decision. When
 `MINER_LOG_GEMM_SHAPES` names a file, the plugin appends one JSON line per
-int7 GEMM: the time, `m`, `n`, `k`, and whether the noisy multiply ran. It
-buffers lines and writes them 4,096 at a time. Without the variable, it does
-nothing.
+int7 GEMM, a multiplication of 7-bit integers: the time, `m`, `n`, `k`, and
+whether the noisy multiply ran. It buffers lines and writes them 4,096 at a
+time. Without the variable, it does nothing.
 
 Proofs cover only the batches that used the noisy multiply. The share of
 int7 GEMM work that earned proofs also needs the batches under `min_m` that
