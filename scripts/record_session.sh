@@ -14,7 +14,7 @@
 # --shapes logs every int7 GEMM's shape (patches/0003), and the session file
 # then holds each run's proven share. Exit: 0 every run recorded, 1 a run failed.
 set -uo pipefail
-cd "$(dirname "$0")/../.."
+cd "$(dirname "$0")/.."
 
 OUT="$1"
 SHAPES=$([ "${2:-}" = --shapes ] && echo 1 || echo 0)
