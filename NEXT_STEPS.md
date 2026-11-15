@@ -20,6 +20,12 @@ record the result in the README or a decision record.
   the opened columns with the declared matrix and run full checks on a sample
   of jobs, or hash the weights for the next job before issuing it.
 
+- [ ] **Hash only the matching matrix.** For each new job, the verifier hashes
+  every declared matrix of the proof's shape, 3.76 GB for a `gate_up_proj`
+  proof, to find the one it used. Comparing the proof's opened columns with
+  each candidate first, and hashing only the match, keeps the full-matrix
+  check with 4.5 to 11 times less hashing on the recorded runs.
+
 - [ ] **Sign the GPU's ID.** The GPU reports its own ID, so a host can fake it
   or claim several IDs for one GPU. An H100 signs attestation reports only in
   confidential computing mode, inside a confidential virtual machine. Open
