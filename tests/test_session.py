@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 from safetensors.numpy import save_file
 
-from pouw.cheats import CHEATS, all_cheats
+from pouw.cheats import CHEATS, Context, OtherGpuJob, Skipped, all_cheats
 from pouw.cheats.relay import Relay
 from pouw.jobs import JobIssuer
 from pouw.protocol import RpcClient, stop_server
@@ -124,3 +124,21 @@ def test_missing_declared_weights_are_an_error(tmp_path):
     run = _run_dir(tmp_path / "honest", "/root/model", "/root/model", "Downloaded from a pod")
     with pytest.raises(ValueError, match="--weights"):
         build([run], gpu="CPU")
+
+
+@pytest.mark.parametrize("attribute_gpus", [False, True])
+def test_theft_is_skipped_when_every_gpu_gets_the_shared_job(attribute_gpus):
+    issuer = JobIssuer(nbits=bits_for_win_probability(1 / 50, K), interval_s=60, max_age_s=60)
+    verifier = Verifier(issuer, DeclaredWeights({}), attribute_gpus=attribute_gpus)
+
+    class Client:
+        def call(self, method, params):
+            return verifier.issue(params).to_dict()
+
+    honest = {"plain_proof": "", "mining_job": verifier.issue({"gpu_id": "GPU-real"}).to_dict()}
+    if attribute_gpus:
+        cheated, _ = OtherGpuJob().apply(honest, Context(Client(), 0.0))
+        assert cheated["mining_job"] != honest["mining_job"]
+    else:
+        with pytest.raises(Skipped, match="attribution is off"):
+            OtherGpuJob().apply(honest, Context(Client(), 0.0))

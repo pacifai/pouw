@@ -113,7 +113,7 @@ class CheatLabels:
 
     def __init__(self, path: Path):
         lines = path.read_text().splitlines() if path.exists() else []
-        self._marks = {m["hash"]: m for m in map(json.loads, filter(str.strip, lines))}
+        self._marks = {m["hash"]: m for m in map(json.loads, filter(str.strip, lines)) if "hash" in m}
         self._seen: set[str] = set()
 
     def label(self, submission: dict) -> dict | None:

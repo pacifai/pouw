@@ -10,6 +10,8 @@ import base64
 import time
 from dataclasses import dataclass
 
+from pearl_mining import IncompleteBlockHeader
+
 from ..jobs import MAX_AGE_S
 from ..protocol import RpcClient
 
@@ -31,6 +33,10 @@ class Change:
 class Context:
     verifier: RpcClient
     job_seen_at: float
+
+
+class Skipped(Exception):
+    """The cheat doesn't apply to this submission, for the reason in the message."""
 
 
 class Cheat:
@@ -85,6 +91,8 @@ class OtherGpuJob(Cheat):
 
     def apply(self, submission, ctx):
         other = ctx.verifier.call("getMiningInfo", {"gpu_id": self.other_gpu_id})
+        if _gpu_id_hash(other) == _gpu_id_hash(submission["mining_job"]):
+            raise Skipped("the verifier returned a job for the prover's own GPU ID, so GPU attribution is off")
         change = Change("job", "the prover's job", f"{self.other_gpu_id}'s job")
         return {**submission, "mining_job": other}, [change]
 
@@ -103,6 +111,11 @@ class LateSubmission(Cheat):
         time.sleep(max(0.0, send_at - time.time()))
         delay = f"{self.max_age_s + self.margin_s:.0f} s after the job was issued"
         return submission, [Change("submitted", "right after the win", delay)]
+
+
+def _gpu_id_hash(job: dict) -> bytes:
+    header = IncompleteBlockHeader.from_bytes(base64.b64decode(job["incomplete_header_bytes"]))
+    return bytes(header.merkle_root)
 
 
 def _int8(byte: int) -> int:

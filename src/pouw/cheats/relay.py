@@ -2,7 +2,7 @@
 
 After every `every`-th honest proof, it sends a cheated copy of that proof,
 cycling through its cheats, and logs one JSON line per cheated submission so a
-session file can mark it.
+session file can mark it. A cheat that doesn't apply logs why and sends nothing.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import BinaryIO
 
 from ..protocol import RpcClient, answer, start_server
-from . import Cheat, Context
+from . import Cheat, Context, Skipped
 
 # The cheated copy follows the honest proof, so the verifier sees the honest one first.
 CHEAT_DELAY_S = 0.2
@@ -84,7 +84,11 @@ class Relay:
         verifier = RpcClient(self.verifier_socket)
         try:
             seen_at = self._job_seen_at.get(honest["mining_job"]["incomplete_header_bytes"], time.time())
-            cheated, changes = cheat.apply(honest, Context(verifier, seen_at))
+            try:
+                cheated, changes = cheat.apply(honest, Context(verifier, seen_at))
+            except Skipped as e:
+                self._write({"time": time.time(), "cheat": cheat.key, "skipped": str(e)})
+                return
             try:
                 result = verifier.call("submitPlainProof", cheated)
             except RuntimeError as e:
@@ -94,13 +98,18 @@ class Relay:
             verifier.close()
 
     def _log(self, cheat: Cheat, submission: dict, changes: list, result: dict) -> None:
-        line = {
-            "time": time.time(),
-            "cheat": cheat.key,
-            "hash": submission_hash(submission),
-            "changes": [asdict(c) for c in changes],
-            "result": result,
-            "repeat": cheat.resends_unchanged,
-        }
+        self._write(
+            {
+                "time": time.time(),
+                "cheat": cheat.key,
+                "hash": submission_hash(submission),
+                "changes": [asdict(c) for c in changes],
+                "result": result,
+                "repeat": cheat.resends_unchanged,
+            }
+        )
+
+    def _write(self, line: dict) -> None:
+        print(json.dumps(line), flush=True)
         with self._lock, self.log_path.open("a") as f:
             f.write(json.dumps(line) + "\n")
