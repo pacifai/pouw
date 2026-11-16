@@ -4,7 +4,9 @@
 # Runs on the pod, not your laptop. It installs uv and Rust, checks out
 # upstream at the commit in patches/UPSTREAM with this repo's patches applied,
 # and builds the whole workspace: the CUDA kernels, the proof library, and
-# vLLM. The kernel build takes a while. You can rerun it safely.
+# vLLM. It then installs pouw's dependencies from pyproject.toml into
+# upstream's environment. The kernel build takes a while. You can rerun it
+# safely.
 #
 # Expects an nvidia/cuda:13.0.x-devel image on a host whose driver supports
 # CUDA 13, because upstream builds against PyTorch for CUDA 13.0.
@@ -28,6 +30,7 @@ uv python install 3.12
 # uv doesn't notice changed Rust sources, so rebuild the proof library every
 # time to pick up the patches.
 UV_TORCH_BACKEND=cu130 uv sync --all-packages --all-groups --reinstall-package py-pearl-mining
+uv pip install -q --python "$UPSTREAM_DIR/.venv/bin/python" -r "$REPO/pyproject.toml"
 
 MODEL=/root/model
 if [ ! -f "$MODEL/config.json" ]; then

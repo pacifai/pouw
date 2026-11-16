@@ -20,8 +20,7 @@ RUN pip install --no-cache-dir uv maturin \
  && cd /opt/upstream/py-pearl-mining \
  && maturin build --release -o /wheels
 
-COPY pyproject.toml /work/pyproject.toml
-RUN uv pip install --system /wheels/*.whl numpy safetensors blake3 pytest
-
 WORKDIR /work
+COPY pyproject.toml /work/pyproject.toml
+RUN uv pip install --system /wheels/*.whl -r pyproject.toml --group dev
 ENV PYTHONPATH=/work/src
