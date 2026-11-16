@@ -24,7 +24,7 @@ from pearl_mining import (
     verify_plain_proof_for_cert_version,
 )
 
-from .proof import COLS_PATTERN, NOISE_RANK, ROWS_PATTERN, gpu_config, job_key
+from .proof import COLS_PATTERN, NOISE_RANK, ROWS_PATTERN, config_from_indices, job_key
 from .protocol import RpcClient
 from .weights import DeclaredWeights
 
@@ -50,23 +50,25 @@ def prove(
     max_tiles: int = MAX_TILES,
     want_win: bool = True,
     seed: int | None = None,
+    cols_pattern: list[int] = COLS_PATTERN,
 ) -> tuple[PlainProof | None, int]:
     """Tries tiles of A·B until one wins, or with want_win=False until one loses.
 
+    cols_pattern other than the GPU's makes a tile the verifier must refuse.
     Returns the proof, or None, and the number of tiles tried.
     """
     m, k = A.shape
     n, _ = Bt.shape
-    key = job_key(header_bytes, gpu_config(k))
+    key = job_key(header_bytes, config_from_indices(k, NOISE_RANK, ROWS_PATTERN, cols_pattern))
     tree_a = MerkleTree.from_buffer(np.ascontiguousarray(A), key)
     tree_b = MerkleTree.from_buffer(np.ascontiguousarray(Bt), key)
     header = IncompleteBlockHeader.from_bytes(header_bytes)
 
-    tiles = [(r, c) for r in tile_starts(ROWS_PATTERN, m) for c in tile_starts(COLS_PATTERN, n)]
+    tiles = [(r, c) for r in tile_starts(ROWS_PATTERN, m) for c in tile_starts(cols_pattern, n)]
     random.Random(seed).shuffle(tiles)
     for tried, (r, c) in enumerate(tiles[:max_tiles], start=1):
         rows = [r + d for d in ROWS_PATTERN]
-        cols = [c + d for d in COLS_PATTERN]
+        cols = [c + d for d in cols_pattern]
         proof = _package(A.shape, Bt.shape, rows, cols, tree_a, tree_b)
         ok, _ = verify_plain_proof_for_cert_version(cert_version, header, proof)
         if ok == want_win:
