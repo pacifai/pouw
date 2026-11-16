@@ -2,7 +2,10 @@
 
 It answers the two JSON-RPC calls upstream's plugin makes to its gateway:
 getMiningInfo for the current job, and submitPlainProof for the proof of one
-winning tile. A proof counts only if it passes every check in CHECKS, in order.
+winning tile. A proof counts only if it passes every check in CHECKS. The
+verifier runs them in order, with one exception: it checks the matrix shape,
+part of declared_weights, as soon as it decodes the proof, because upstream's
+verify allocates memory for a proof's claimed dimensions before checking them.
 """
 
 from __future__ import annotations
@@ -28,7 +31,7 @@ CHECKS = {
     "issued_job": "The proof's job was issued by this verifier, with its target and version unchanged",
     "on_time": "The job is no older than the maximum age",
     "valid_proof": "The proof uses the GPU prover's tile and noise rank, and upstream's verify finds the tile wins",
-    "declared_weights": "The weight matrix's Merkle root matches one of the declared model's matrices",
+    "declared_weights": "The weight matrix's shape and Merkle root match one of the declared model's matrices",
     "new_tile": "Nobody submitted this tile before",
 }
 
@@ -97,6 +100,8 @@ class Verifier:
             return v.reject("valid_proof", "MoE proofs are not supported")
         v.m, v.n, v.k = proof.m, proof.n, proof.k
         v.a_rows, v.b_cols = list(proof.a.row_indices), list(proof.bt.row_indices)
+        if not self.weights.has_shape(proof.n, proof.k):
+            return v.reject("declared_weights", f"no declared matrix has shape {proof.n} x {proof.k}")
 
         config = config_from_indices(proof.k, proof.noise_rank, v.a_rows, v.b_cols)
         if config.to_bytes() != gpu_config(proof.k).to_bytes():

@@ -9,6 +9,7 @@ import base64
 
 import numpy as np
 import pytest
+from pearl_mining import PlainProof
 
 from pouw.jobs import JobIssuer, new_job
 from pouw.proof import COLS_PATTERN, ROWS_PATTERN
@@ -109,6 +110,29 @@ def test_smaller_tile_is_rejected(verifier, checkpoint):
     assert verdict.check == "valid_proof"
     assert verdict.reason.startswith("tile pattern")
     assert verdict.work == 0
+
+
+@pytest.mark.parametrize("n, k", [(512, 1 << 22), (7, K)])
+def test_undeclared_shape_is_rejected_before_verify(verifier, checkpoint, n, k):
+    # With k = 2^22, upstream's verify would allocate about 1.8 GB before its own checks.
+    job, job_dict = _job(verifier)
+    honest = _prove(job, checkpoint["model.layers.0.self_attn.o_proj.weight"])
+    forged = PlainProof(honest.m, n, k, honest.noise_rank, honest.a, honest.bt, None)
+    verdict = verifier.check(forged.to_base64(), job_dict)
+    assert not verdict.accepted
+    assert verdict.check == "declared_weights"
+    assert verdict.reason.startswith("no declared matrix has shape")
+
+
+def test_zero_noise_rank_is_rejected_before_verify(verifier, checkpoint):
+    # Upstream's verify divides by the rank.
+    job, job_dict = _job(verifier)
+    honest = _prove(job, checkpoint["model.layers.0.self_attn.o_proj.weight"])
+    forged = PlainProof(honest.m, honest.n, honest.k, 0, honest.a, honest.bt, None)
+    verdict = verifier.check(forged.to_base64(), job_dict)
+    assert not verdict.accepted
+    assert verdict.check == "valid_proof"
+    assert verdict.reason.startswith("tile pattern")
 
 
 def test_replayed_proof_is_rejected(verifier, checkpoint):

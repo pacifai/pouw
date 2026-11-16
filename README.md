@@ -94,7 +94,7 @@ jobs and sends proofs to. A proof is accepted only if it passes five checks:
 | Issued job: this verifier issued the job, unchanged | Made-up jobs and edited job fields |
 | On time: the job is at most 15 seconds old | Work done in advance, and old proofs |
 | Valid proof: the proof uses the GPU's 2 × 64 tile and noise rank, and upstream's verify function recomputes the tile and finds it wins | Forged, losing, or smaller tiles, and proofs moved to another job |
-| Declared weights: `B`'s Merkle root matches a declared matrix | Other weights, including an edited copy |
+| Declared weights: `B`'s shape and Merkle root match a declared matrix | Other weights, including an edited copy |
 | New tile: the tile wasn't submitted before | The same tile counted twice |
 
 The [decision records](docs/decisions/) give the reasoning behind each check.
