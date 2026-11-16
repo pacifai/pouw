@@ -8,7 +8,7 @@
 Copies this tree to the pod, builds upstream's vLLM plugin with this repo's
 patches, records the honest, relay, and changed-model runs, and writes the
 session file to results/sessions/ and the raw runs to runs/. Then it
-terminates the pod. The pod also deletes itself after --max-hours.
+terminates the pod. The pod also stops itself after --max-hours, which ends GPU billing.
 
 Reads RUNPOD_API_KEY and POUW_SSH_KEY from the shell or the repo's .env.
 Run with: uv run runpod/record.py
@@ -42,10 +42,13 @@ SSH_WAIT_S = 900
 SETUP_TIMEOUT_S = 7200
 RECORD_TIMEOUT_S = 5400
 # The CUDA image has no SSH server. The start command installs one, and first
-# arms a timer that deletes the pod through RunPod's API after the hard cap.
+# arms a timer that stops the pod through RunPod's API after the hard cap. The
+# key RunPod gives the pod may stop it but not delete it.
 START = (
-    "bash -c '(sleep {cap_s}; curl -s -X DELETE https://rest.runpod.io/v1/pods/$RUNPOD_POD_ID"
-    ' -H "Authorization: Bearer $RUNPOD_API_KEY") >/dev/null 2>&1 &'
+    'bash -c \'(sleep {cap_s}; curl -s -o /root/stop.out -w "%{{http_code}}\\n" -X POST'
+    " https://api.runpod.io/v2/pods/$RUNPOD_POD_ID/action"
+    ' -H "Authorization: Bearer $RUNPOD_API_KEY" -H "Content-Type: application/json"'
+    ' -d "{{\\"action\\":\\"stop\\"}}") >/root/stop.log 2>&1 &'
     " apt-get update -q >/dev/null && DEBIAN_FRONTEND=noninteractive apt-get install -y -q"
     " openssh-server git curl build-essential >/dev/null;"
     ' mkdir -p /run/sshd /root/.ssh && echo "$PUBLIC_KEY" > /root/.ssh/authorized_keys'
@@ -82,7 +85,7 @@ def confirm_price(args):
     if price is None:
         fail(f"no {args.cloud} price for {args.gpu}; not renting without one", 2)
     print(f"{args.gpu}, {args.cloud} cloud: ${price}/hr, stock {gpu.get('availability', '?')}")
-    print(f"A session takes about 1.5 hours. The pod deletes itself after {args.max_hours} hours at most.")
+    print(f"A session takes about 1.5 hours. The pod stops itself after {args.max_hours} hours at most.")
     if (
         not args.yes
         and input("\nRent it? It bills by the second until the recording ends. [y/N] ").strip().lower() != "y"
@@ -237,7 +240,7 @@ def main():
         default=os.environ.get("POUW_SSH_KEY"),
         help="SSH private key registered on the account (default: POUW_SSH_KEY)",
     )
-    p.add_argument("--max-hours", type=float, default=3, help="the pod deletes itself this long after it starts")
+    p.add_argument("--max-hours", type=float, default=3, help="the pod stops itself this long after it starts")
     p.add_argument("--shapes", action="store_true", help="log GEMM shapes, for each run's noisy and proven shares")
     p.add_argument("--yes", "-y", action="store_true", help="rent without asking")
     args = p.parse_args()
