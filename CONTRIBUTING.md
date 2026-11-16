@@ -24,7 +24,7 @@ it, and the core never imports them.
 | `src/pouw/cheats/` | One class per cheat, and the relay that sends them |
 | `src/pouw/record/` | The recorder, the session file, and the changed model |
 | `tests/` | Tests |
-| `scripts/` | Shell scripts for the GPU host: setup, one run, and a session's three runs |
+| `scripts/` | Shell scripts: upstream's checkout, and the GPU host's setup, one run, and a session's three runs |
 | `runpod/record.py` | Rents an H100, records a session, and releases the pod |
 | `patches/` | Changes to upstream's code |
 | `docker/` | The image that builds upstream's proof library and runs the tests |
@@ -87,9 +87,9 @@ compiles kernels, so its time is not comparable with later runs.
   against the pinned commit, saved with a numbered name and described in
   `patches/README.md`. Keep patches small, and leave the proof format and the
   verify function unchanged.
-- Move the upstream pin deliberately. `docker/Dockerfile` and
-  `scripts/setup_pod.sh` build the same commit. To move it, change both, check
-  that every patch applies, and rerun the tests.
+- Move the upstream pin deliberately. `patches/UPSTREAM` holds the commit
+  that `docker/Dockerfile` and `scripts/setup_pod.sh` build. To move it,
+  change that file, check that every patch applies, and rerun the tests.
 - Credit Pearl Research Labs in the README only. Elsewhere, call their code
   *upstream*, or name the part: the plugin, the gateway, the verify function.
 - Use *prover*, not *miner*, for the GPU that does the work. Mining terms stay

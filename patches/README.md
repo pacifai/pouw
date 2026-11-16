@@ -1,18 +1,19 @@
 # Patches to upstream
 
-Each `.patch` file is a `git diff` against the pinned upstream commit,
-`d7c517d267f10f5bcbbdc366f3e603942f9a5ab5`, with paths relative to the
-upstream repository root. `docker/Dockerfile` and `scripts/setup_pod.sh`
-check out that commit and apply every `*.patch` file in name order before
-building.
+Each `.patch` file is a `git diff` against the pinned upstream commit, which
+`patches/UPSTREAM` holds, with paths relative to the upstream repository
+root. `scripts/fetch_upstream.sh` checks out that commit and applies every
+`*.patch` file in name order. `docker/Dockerfile` and `scripts/setup_pod.sh`
+both run it before building.
 
 To change a patch, check out the pinned commit, apply the existing patches,
 and edit the code. Then save only the files that patch changes, with
 `git diff -- <its paths> > patches/<name>.patch`. A diff of the whole tree
 would also hold the other patches, and `git apply patches/*.patch` would then
 fail. Patch 0001 is the `release-gil-in-proofs` branch of the `pacifai/pearl`
-fork: regenerate it there with `git diff <pinned commit> HEAD`. When the pin
-moves, check that each patch still applies, and rerun the tests.
+fork: regenerate it there with `git diff <pinned commit> HEAD`. To move the
+pin, change `patches/UPSTREAM`, check that each patch still applies, and
+rerun the tests.
 
 ## 0001-release-gil-in-proof-trees.patch
 
