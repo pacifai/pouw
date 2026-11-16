@@ -135,7 +135,7 @@ def wait_for_ssh(pod_id, key):
 
 
 def ship(conn):
-    """Copies every file git would track, committed or not, to POD_REPO."""
+    """Copies every file git would track, committed or not, to POD_REPO, with the commit in .commit."""
     say("copying this working tree")
     listed = subprocess.run(
         ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
@@ -148,9 +148,20 @@ def ship(conn):
         for name in filter(None, listed.split("\0")):
             if (ROOT / name).is_file():
                 tar.add(ROOT / name, arcname=name)
+        commit = commit_id().encode()
+        info = tarfile.TarInfo(".commit")
+        info.size = len(commit)
+        tar.addfile(info, io.BytesIO(commit))
     archive.seek(0)
     conn.put(archive, "/root/pouw.tar.gz")
     conn.run(f"mkdir -p {POD_REPO} && tar xzf /root/pouw.tar.gz -C {POD_REPO}", hide=True)
+
+
+def commit_id():
+    """The checked-out commit, with -dirty if the working tree differs from it."""
+    return subprocess.run(
+        ["git", "describe", "--always", "--dirty", "--abbrev=40"], cwd=ROOT, capture_output=True, check=True, text=True
+    ).stdout.strip()
 
 
 def fetch(conn, stamp):

@@ -43,7 +43,7 @@ run honest DESCRIPTION="The prover sends every proof unchanged"
 run relay RELAY=1 RELAY_ARGS="--every 8 --start-after 4" \
   DESCRIPTION="A relay between the prover and the verifier sends cheated copies of real proofs"
 [ -d /root/model-changed ] || $POUW changed-model /root/model /root/model-changed
-run changed-model MODEL=/root/model-changed VERIFY_WEIGHTS=/root/model PROMPTS=180 \
+run changed-model MODEL=/root/model-changed VERIFY_WEIGHTS=/root/model CHANGED_MODEL=1 PROMPTS=180 \
   DESCRIPTION="vLLM serves a copy of the model with one weight changed in every int8 matrix"
 
 echo "== $(date +%T) session file"

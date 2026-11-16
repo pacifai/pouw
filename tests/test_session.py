@@ -34,11 +34,16 @@ EXPECTED = {
 EASIER_FACTOR = 10
 
 
-def _run_dir(path, model, declared, description):
+def _run_dir(path, model, declared, description, changed_model=False):
     path.mkdir()
-    (path / "run.json").write_text(
-        json.dumps({"description": description, "model": str(model), "declared_model": str(declared)})
-    )
+    meta = {
+        "description": description,
+        "model": str(model),
+        "declared_model": str(declared),
+        "changed_model": changed_model,
+        "pouw_commit": "0123abc",
+    }
+    (path / "run.json").write_text(json.dumps(meta))
     return path
 
 
@@ -83,12 +88,15 @@ def test_session_marks_every_cheat_with_the_check_that_caught_it(tmp_path):
 
     relay = _run_dir(tmp_path / "relay", declared, declared, "A relay sends cheated copies")
     _record(relay, Bt, Bt, relay_every=1)
-    changed_model = _run_dir(tmp_path / "changed-model", tmp_path / "changed", declared, "A changed model")
+    changed_model = _run_dir(tmp_path / "changed-model", tmp_path / "changed", declared, "A changed model", True)
     _record(changed_model, Bt, changed)
 
     session = build([relay, changed_model], gpu="CPU")
     assert session["format"] == FORMAT
     relay_run, changed_run = session["runs"]
+    assert session["recorded_utc"] == relay_run["started_utc"] <= changed_run["started_utc"]
+    assert relay_run["versions"]["pouw_commit"] == "0123abc" and relay_run["versions"]["upstream_commit"] is None
+    assert (relay_run["changed_model"], changed_run["changed_model"]) == (False, True)
 
     cheated = [p for p in relay_run["proofs"] if p["cheat"]]
     assert {p["cheat"] for p in cheated} == set(CHEATS)
@@ -123,6 +131,15 @@ def test_shares_count_only_work_after_serving_started(tmp_path):
     ]
     assert work.proven_share(proofs) == 0.5
     assert GemmWork.read(tmp_path / "missing.jsonl", since=0) is None
+
+
+def test_run_json_without_changed_model_is_an_error(tmp_path):
+    run = _run_dir(tmp_path / "honest", "/root/model", "/root/model", "An older run")
+    meta = json.loads((run / "run.json").read_text())
+    del meta["changed_model"]
+    (run / "run.json").write_text(json.dumps(meta))
+    with pytest.raises(ValueError, match="lacks changed_model"):
+        build([run], gpu="CPU")
 
 
 def test_missing_declared_weights_are_an_error(tmp_path):

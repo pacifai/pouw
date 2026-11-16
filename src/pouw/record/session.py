@@ -23,6 +23,10 @@ from .recorder import load, replay
 FORMAT = "pouw.session.v2"
 CHANGED_MODEL = "changed_model"
 CHANGED_MODEL_DESCRIPTION = "Serves a copy of the declared model with one weight changed in every int8 matrix"
+# run.json fields that scripts/run_e2e.sh always writes.
+RUN_FIELDS = ("description", "model", "declared_model", "changed_model")
+# run.json fields for the code and model a run used, null when the pod couldn't tell.
+VERSION_FIELDS = ("pouw_commit", "upstream_commit", "patches_sha256", "declared_model_revision")
 TIME_DECIMALS = 3
 # How long the demo's timeline runs past a run's last proof.
 TIMELINE_TAIL_S = 5.0
@@ -39,7 +43,7 @@ def build(run_dirs: list[Path], gpu: str | None, weights: list[Path] | None = No
     declared: dict[str, DeclaredWeights] = {}
     runs = []
     for run_dir in run_dirs:
-        model = _read_json(run_dir / "run.json")["declared_model"]
+        model = run_meta(run_dir)["declared_model"]
         if model not in declared:
             declared[model] = DeclaredWeights.from_safetensors(weights or sorted(Path(model).glob("*.safetensors")))
             if not declared[model].tensors:
@@ -48,7 +52,7 @@ def build(run_dirs: list[Path], gpu: str | None, weights: list[Path] | None = No
         runs.append(build_run(run_dir, declared[model]))
     return {
         "format": FORMAT,
-        "recorded_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "recorded_utc": min(run["started_utc"] for run in runs) if runs else None,
         "gpu": gpu,
         "checks": CHECKS,
         "cheats": {**CHEATS, CHANGED_MODEL: CHANGED_MODEL_DESCRIPTION},
@@ -57,11 +61,10 @@ def build(run_dirs: list[Path], gpu: str | None, weights: list[Path] | None = No
 
 
 def build_run(run_dir: Path, weights: DeclaredWeights) -> dict:
-    meta = _read_json(run_dir / "run.json")
+    meta = run_meta(run_dir)
     serving_since = float((run_dir / "serving_since").read_text())
     recording = load(run_dir / "recording.jsonl")
-    changed_model = meta["model"] != meta["declared_model"]
-    proofs = _check_again(run_dir, recording, weights, serving_since, changed_model)
+    proofs = _check_again(run_dir, recording, weights, serving_since, meta["changed_model"])
     settings = recording.settings
     work = GemmWork.read(run_dir / "gemm_shapes.jsonl", serving_since)
     return {
@@ -69,6 +72,9 @@ def build_run(run_dir: Path, weights: DeclaredWeights) -> dict:
         "description": meta["description"],
         "model": meta["model"],
         "declared_model": meta["declared_model"],
+        "changed_model": meta["changed_model"],
+        "versions": {key: meta.get(key) for key in VERSION_FIELDS},
+        "started_utc": _utc(recording.started_at()),
         "settings": {key: settings.get(key) for key in ("win_probability", "interval_s", "max_age_s")},
         "duration_s": round(max((p["t"] for p in proofs), default=0) + TIMELINE_TAIL_S, 1),
         "noisy_share": work and work.noisy_share(),
@@ -159,5 +165,14 @@ class GemmWork:
         return sum(p["work"] for p in proofs if p["accepted"] and p["t"] >= 0) / self.total
 
 
-def _read_json(path: Path) -> dict:
-    return json.loads(path.read_text())
+def run_meta(run_dir: Path) -> dict:
+    path = run_dir / "run.json"
+    meta = json.loads(path.read_text())
+    missing = [key for key in RUN_FIELDS if key not in meta]
+    if missing:
+        raise ValueError(f"{path} lacks {', '.join(missing)}; scripts/run_e2e.sh writes them")
+    return meta
+
+
+def _utc(t: float) -> str:
+    return datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

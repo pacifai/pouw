@@ -69,6 +69,12 @@ class Recording:
     submissions: list[tuple[float, dict]] = field(default_factory=list)
     settings: dict = field(default_factory=dict)
 
+    def started_at(self) -> float:
+        """When the verifier issued its first job."""
+        if not self.jobs:
+            raise ValueError("the recording has no jobs")
+        return min(job.issued_at for job in self.jobs)
+
 
 def load(path: Path) -> Recording:
     recording = Recording()
