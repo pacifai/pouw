@@ -10,6 +10,9 @@ from pathlib import Path
 from typing import BinaryIO, Callable
 
 DEFAULT_SOCKET = "/tmp/pearlgw.sock"
+# Upstream's gateway allows 1 MiB. A proof opens 66 rows of k bytes, so a down_proj
+# proof with k = 14336 takes about 1.3 MB of base64.
+MAX_REQUEST_BYTES = 4 << 20
 
 Dispatch = Callable[[str, dict], object]
 Handler = Callable[[BinaryIO, BinaryIO], None]
@@ -42,8 +45,14 @@ class RpcClient:
 
 
 def answer(rfile: BinaryIO, wfile: BinaryIO, dispatch: Dispatch) -> None:
-    """Answers each request line with dispatch(method, params), and an exception as an error."""
-    for line in rfile:
+    """Answers each request line with dispatch(method, params), and an exception as an error.
+
+    A line longer than MAX_REQUEST_BYTES gets an error, and ends the connection.
+    """
+    while line := rfile.readline(MAX_REQUEST_BYTES + 1):
+        if len(line) > MAX_REQUEST_BYTES:
+            _respond(wfile, {"error": {"code": -32600, "message": f"request over {MAX_REQUEST_BYTES} bytes"}}, None)
+            return
         if not line.strip():
             continue
         request_id = None
@@ -51,11 +60,15 @@ def answer(rfile: BinaryIO, wfile: BinaryIO, dispatch: Dispatch) -> None:
             request = json.loads(line)
             request_id = request.get("id")
             result = dispatch(request["method"], request.get("params") or {})
-            response = {"jsonrpc": "2.0", "result": result, "id": request_id}
+            response = {"result": result}
         except Exception as e:
-            response = {"jsonrpc": "2.0", "error": {"code": -32000, "message": str(e)}, "id": request_id}
-        wfile.write((json.dumps(response) + "\n").encode())
-        wfile.flush()
+            response = {"error": {"code": -32000, "message": str(e)}}
+        _respond(wfile, response, request_id)
+
+
+def _respond(wfile: BinaryIO, response: dict, request_id: object) -> None:
+    wfile.write((json.dumps({"jsonrpc": "2.0", **response, "id": request_id}) + "\n").encode())
+    wfile.flush()
 
 
 class _UnixServer(socketserver.ThreadingUnixStreamServer):

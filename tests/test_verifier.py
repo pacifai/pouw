@@ -6,11 +6,14 @@ a real tensor from the int7 Llama checkpoint.
 """
 
 import base64
+import json
+import socket
 
 import numpy as np
 import pytest
 from pearl_mining import IncompleteBlockHeader, PlainProof, verify_plain_proof_for_cert_version
 
+from pouw import protocol
 from pouw.jobs import KEEP_MAX_AGES, JobIssuer, new_job
 from pouw.proof import COLS_PATTERN, ROWS_PATTERN
 from pouw.protocol import RpcClient, stop_server
@@ -227,6 +230,21 @@ def test_over_the_socket(verifier, checkpoint, tmp_path):
         result = client.call("submitPlainProof", {"mining_job": job_dict})
         assert result["accepted"] is False
         client.close()
+    finally:
+        stop_server(server)
+
+
+def test_over_long_request_closes_the_connection(verifier, tmp_path, monkeypatch):
+    monkeypatch.setattr(protocol, "MAX_REQUEST_BYTES", 1000)
+    sock = str(tmp_path / "gw.sock")
+    server = VerifierService(verifier).start(sock)
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.connect(sock)
+            s.sendall(b"x" * 1010)
+            reply = s.makefile("rb")
+            assert json.loads(reply.readline())["error"]["code"] == -32600
+            assert reply.readline() == b""
     finally:
         stop_server(server)
 
