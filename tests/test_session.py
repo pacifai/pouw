@@ -6,16 +6,17 @@ import time
 
 import numpy as np
 import pytest
+from pearl_mining import IncompleteBlockHeader, PlainProof, verify_plain_proof_for_cert_version
 from safetensors.numpy import save_file
 
-from pouw.cheats import CHEATS, Context, OtherGpuJob, Skipped, all_cheats
+from pouw.cheats import CHEATS, Context, EasierTarget, OtherGpuJob, Skipped, all_cheats
 from pouw.cheats.relay import Relay
 from pouw.jobs import JobIssuer
 from pouw.protocol import RpcClient, stop_server
 from pouw.prover import prove, random_activations
 from pouw.record.recorder import Recorder
 from pouw.record.session import FORMAT, GemmWork, build
-from pouw.target import bits_for_win_probability
+from pouw.target import bits_for_win_probability, target_to_bits
 from pouw.verifier import Verifier, VerifierService
 from pouw.weights import DeclaredWeights
 
@@ -23,11 +24,14 @@ K = 2048
 NAME = "model.layers.0.self_attn.o_proj.weight"
 EXPECTED = {
     "replay": "new_tile",
-    "difficulty": "issued_job",
+    "difficulty": "valid_proof",
     "forged": "valid_proof",
     "theft": "valid_proof",
     "precompute": "on_time",
+    "edited_target": "issued_job",
 }
+# Easier by a factor that keeps the tests' 1 in 50 chance to win below one.
+EASIER_FACTOR = 10
 
 
 def _run_dir(path, model, declared, description):
@@ -47,13 +51,14 @@ def _record(run_dir, Bt_declared, Bt_served, relay_every=None):
     server = service.start(vsock)
     relay_server = None
     if relay_every:
-        relay = Relay(vsock, run_dir / "cheats.jsonl", all_cheats(max_age_s=2), every=relay_every, start_after=0)
+        cheats = all_cheats(max_age_s=2, matrix=Bt_declared, easier_factor=EASIER_FACTOR)
+        relay = Relay(vsock, run_dir / "cheats.jsonl", cheats, every=relay_every, start_after=0)
         relay_server = relay.start(rsock)
     (run_dir / "serving_since").write_text(str(time.time()))
     try:
         client = RpcClient(rsock if relay_every else vsock)
         start = time.time()
-        for seed in range(5 if relay_every else 2):
+        for seed in range(len(CHEATS) if relay_every else 2):
             job = client.call("getMiningInfo", {"gpu_id": "GPU-real"})
             header = base64.b64decode(job["incomplete_header_bytes"])
             proof, _ = prove(header, job["cert_version"], random_activations(128, K, seed=seed), Bt_served, seed=seed)
@@ -124,6 +129,35 @@ def test_missing_declared_weights_are_an_error(tmp_path):
     run = _run_dir(tmp_path / "honest", "/root/model", "/root/model", "Downloaded from a pod")
     with pytest.raises(ValueError, match="--weights"):
         build([run], gpu="CPU")
+
+
+def test_easier_target_proof_is_genuine_except_for_the_win():
+    Bt = np.random.default_rng(1).integers(-63, 64, size=(512, K), dtype=np.int8)
+    issuer = JobIssuer(nbits=bits_for_win_probability(1 / 50, K), interval_s=60, max_age_s=60)
+    verifier = Verifier(issuer, DeclaredWeights({NAME: Bt}), attribute_gpus=True)
+
+    class Client:
+        def call(self, method, params):
+            return verifier.issue(params).to_dict()
+
+    honest = {"plain_proof": "", "mining_job": verifier.issue({"gpu_id": "GPU-real"}).to_dict()}
+    cheat = EasierTarget(Bt, factor=EASIER_FACTOR)
+    cheated, changes = cheat.apply(honest, Context(Client(), 0.0, {"gpu_id": "GPU-real"}))
+
+    verdict = verifier.check(cheated["plain_proof"], cheated["mining_job"])
+    assert not verdict.accepted and verdict.check == "valid_proof", verdict
+    assert verdict.reason.startswith("proof verification failed")
+    assert (verdict.n, verdict.k) == Bt.shape and verdict.gpu_id == "GPU-real"
+    header = IncompleteBlockHeader.from_bytes(base64.b64decode(cheated["mining_job"]["incomplete_header_bytes"]))
+    proof = PlainProof.from_base64(cheated["plain_proof"])
+    easier_bits = target_to_bits(cheated["mining_job"]["target"] * EASIER_FACTOR)
+    assert verify_plain_proof_for_cert_version(3, header, proof, easier_bits)[0]
+    assert changes
+
+
+def test_easier_target_without_a_matrix_is_skipped():
+    with pytest.raises(Skipped, match="--weights"):
+        EasierTarget().apply({}, Context(None, 0.0))
 
 
 @pytest.mark.parametrize("attribute_gpus", [False, True])

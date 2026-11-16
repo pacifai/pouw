@@ -36,6 +36,7 @@ class Relay:
         self.every = every
         self.start_after = start_after
         self._job_seen_at: dict[str, float] = {}
+        self._job_params: dict[str, dict] = {}
         self._honest = 0
         self._sent = 0
         self._lock = threading.Lock()
@@ -62,6 +63,7 @@ class Relay:
         job = verifier.call("getMiningInfo", params)
         with self._lock:
             self._job_seen_at.setdefault(job["incomplete_header_bytes"], time.time())
+            self._job_params.setdefault(job["incomplete_header_bytes"], params)
         return job
 
     def _pass_proof(self, verifier: RpcClient, submission: dict) -> dict:
@@ -83,9 +85,11 @@ class Relay:
         time.sleep(CHEAT_DELAY_S)
         verifier = RpcClient(self.verifier_socket)
         try:
-            seen_at = self._job_seen_at.get(honest["mining_job"]["incomplete_header_bytes"], time.time())
+            job = honest["mining_job"]["incomplete_header_bytes"]
+            with self._lock:
+                ctx = Context(verifier, self._job_seen_at.get(job, time.time()), self._job_params.get(job))
             try:
-                cheated, changes = cheat.apply(honest, Context(verifier, seen_at))
+                cheated, changes = cheat.apply(honest, ctx)
             except Skipped as e:
                 self._write({"time": time.time(), "cheat": cheat.key, "skipped": str(e)})
                 return

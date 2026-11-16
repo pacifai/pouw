@@ -75,7 +75,7 @@ head -2 "$OUT/verifier.out"
 if [ "$RELAY" = 1 ]; then
   echo "== cheat relay"
   # shellcheck disable=SC2086  # RELAY_ARGS is a list of flags
-  $POUW relay --listen "$SOCKET" --verifier "$VERIFIER_SOCKET" \
+  $POUW relay --listen "$SOCKET" --verifier "$VERIFIER_SOCKET" --weights "$VERIFY_WEIGHTS"/*.safetensors \
     --log "$OUT/cheats.jsonl" "${max_age_args[@]}" $RELAY_ARGS > "$OUT/relay.out" 2>&1 &
   pids+=($!)
   relay_pid=$!

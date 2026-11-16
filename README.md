@@ -103,14 +103,16 @@ The [decision records](docs/decisions/) give the reasoning behind each check.
 ## Cheats
 
 The cheat relay (`python -m pouw relay`) sits between the GPU and the
-verifier and sends cheated copies of real proofs. The changed model is a copy
+verifier and sends cheated copies of real proofs. For the easier target, it
+searches for a tile with the CPU prover, which takes about a second. The changed model is a copy
 of the checkpoint with one weight changed in every matrix the plugin proves.
 
 | Cheat | Prover's action | Rejected by | H100 run |
 |---|---|---|---|
 | Changed model | Serves a copy of the model with one weight changed per matrix | Declared weights | 72 of 72 |
 | Edited proof | Changes one activation in a real proof by one | Valid proof | 5 of 5 |
-| Easier target | Rewrites the job's target to one 256 times easier | Issued job | 5 of 5 |
+| Easier target | Sends a tile, proven under a real job with the declared weights, that wins only against a target 100,000 times easier | Valid proof | Not yet recorded |
+| Edited target | Rewrites the target sent back with a real proof to one 256 times easier | Issued job | 5 of 5 |
 | Another GPU's job | Submits a real proof under a job issued to another GPU | Valid proof | 5 of 5 |
 | Replay | Sends a proof a second time | New tile, or on time | 6 of 6 |
 | Late proof | Holds a proof until its job expires | On time | 5 of 5 |
