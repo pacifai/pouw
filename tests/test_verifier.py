@@ -9,14 +9,14 @@ import base64
 
 import numpy as np
 import pytest
-from pearl_mining import PlainProof
+from pearl_mining import IncompleteBlockHeader, PlainProof, verify_plain_proof_for_cert_version
 
 from pouw.jobs import JobIssuer, new_job
 from pouw.proof import COLS_PATTERN, ROWS_PATTERN
 from pouw.protocol import RpcClient, stop_server
 from pouw.prover import prove, random_activations, tile_starts
 from pouw.target import bits_for_win_probability, bits_to_target, target_to_bits
-from pouw.verifier import Verifier, VerifierService
+from pouw.verifier import Verifier, VerifierService, _upstream
 from pouw.weights import DeclaredWeights, fuse_like_vllm
 
 K = 2048  # inner dimension: the library requires at least 16x the noise rank (128)
@@ -170,6 +170,36 @@ def test_easier_target_than_issued_is_rejected(verifier, checkpoint):
     assert verdict.reason.startswith("job fields differ")
 
 
+@pytest.mark.parametrize(
+    "params, check",
+    [
+        (lambda j, p: ["not", "an", "object"], "issued_job"),
+        (lambda j, p: {"plain_proof": p}, "issued_job"),
+        (lambda j, p: {"plain_proof": p, "mining_job": "job"}, "issued_job"),
+        (lambda j, p: {"plain_proof": p, "mining_job": {**j, "incomplete_header_bytes": None}}, "issued_job"),
+        (lambda j, p: {"plain_proof": p, "mining_job": {**j, "incomplete_header_bytes": "!!"}}, "issued_job"),
+        (lambda j, p: {"mining_job": j}, "valid_proof"),
+        (lambda j, p: {"plain_proof": 42, "mining_job": j}, "valid_proof"),
+        (lambda j, p: {"plain_proof": "!!", "mining_job": j}, "valid_proof"),
+    ],
+)
+def test_malformed_submission_is_rejected(verifier, checkpoint, params, check):
+    job, job_dict = _job(verifier)
+    proof = _prove(job, checkpoint["model.layers.0.self_attn.o_proj.weight"]).to_base64()
+    verdict = verifier.check_submission(params(job_dict, proof))
+    assert not verdict.accepted
+    assert verdict.check == check
+
+
+def test_upstream_panic_becomes_value_error(verifier, checkpoint):
+    job, _ = _job(verifier)
+    honest = _prove(job, checkpoint["model.layers.0.self_attn.o_proj.weight"])
+    zero_rank = PlainProof(honest.m, honest.n, honest.k, 0, honest.a, honest.bt, None)
+    header = IncompleteBlockHeader.from_bytes(job.header_bytes)
+    with pytest.raises(ValueError, match="upstream panicked"):
+        _upstream(verify_plain_proof_for_cert_version, job.cert_version, header, zero_rank)
+
+
 def test_over_the_socket(verifier, checkpoint, tmp_path):
     sock = str(tmp_path / "gw.sock")
     server = VerifierService(verifier).start(sock)
@@ -181,6 +211,8 @@ def test_over_the_socket(verifier, checkpoint, tmp_path):
         proof, _ = prove(header, job_dict["cert_version"], random_activations(M, K, seed=3), Bt, seed=5)
         result = client.call("submitPlainProof", {"plain_proof": proof.to_base64(), "mining_job": job_dict})
         assert result == {"accepted": True, "reason": "ok"}
+        result = client.call("submitPlainProof", {"mining_job": job_dict})
+        assert result["accepted"] is False
         client.close()
     finally:
         stop_server(server)

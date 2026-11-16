@@ -17,7 +17,7 @@ import threading
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import BinaryIO, Callable
+from typing import BinaryIO, Callable, TypeVar
 
 from pearl_mining import IncompleteBlockHeader, PlainProof, verify_plain_proof_for_cert_version
 
@@ -26,6 +26,8 @@ from .proof import TILE_OUTPUTS, config_from_indices, gpu_config, job_key
 from .protocol import answer, start_server
 from .target import win_probability
 from .weights import DeclaredWeights
+
+T = TypeVar("T")
 
 CHECKS = {
     "issued_job": "The proof's job was issued by this verifier, with its target and version unchanged",
@@ -79,9 +81,17 @@ class Verifier:
             raise ValueError(f"gpu_id must be a string of 1 to {MAX_GPU_ID_LEN} characters")
         return gpu_id
 
-    def check(self, plain_proof_b64: str, mining_job: dict, now: float | None = None) -> Verdict:
+    def check_submission(self, params: object, now: float | None = None) -> Verdict:
+        """The verdict on a submitPlainProof call's params, whatever their shape."""
+        if not isinstance(params, dict):
+            return Verdict(False, "").reject("issued_job", "malformed request: params is not an object")
+        return self.check(params.get("plain_proof"), params.get("mining_job"), now)
+
+    def check(self, plain_proof_b64: object, mining_job: object, now: float | None = None) -> Verdict:
         now = time.time() if now is None else now
-        header_bytes = base64.b64decode(mining_job["incomplete_header_bytes"])
+        header_bytes = _header_bytes(mining_job)
+        if header_bytes is None:
+            return Verdict(False, "").reject("issued_job", "malformed job: no base64 incomplete_header_bytes")
 
         job = self.issuer.lookup(header_bytes)
         if job is None:
@@ -92,8 +102,10 @@ class Verifier:
         if now - job.issued_at > self.issuer.max_age_s:
             return v.reject("on_time", f"stale job: issued {now - job.issued_at:.1f}s ago")
 
+        if not isinstance(plain_proof_b64, str):
+            return v.reject("valid_proof", "malformed proof: plain_proof is not a string")
         try:
-            proof = PlainProof.from_base64(plain_proof_b64)
+            proof = _upstream(PlainProof.from_base64, plain_proof_b64)
         except ValueError as e:
             return v.reject("valid_proof", f"malformed proof: {e}")
         if proof.moe is not None:
@@ -103,12 +115,19 @@ class Verifier:
         if not self.weights.has_shape(proof.n, proof.k):
             return v.reject("declared_weights", f"no declared matrix has shape {proof.n} x {proof.k}")
 
-        config = config_from_indices(proof.k, proof.noise_rank, v.a_rows, v.b_cols)
-        if config.to_bytes() != gpu_config(proof.k).to_bytes():
+        try:
+            config = _upstream(config_from_indices, proof.k, proof.noise_rank, v.a_rows, v.b_cols)
+            same_config = config.to_bytes() == gpu_config(proof.k).to_bytes()
+        except ValueError:
+            same_config = False
+        if not same_config:
             return v.reject("valid_proof", "tile pattern or noise rank differs from the GPU prover's")
 
         header = IncompleteBlockHeader.from_bytes(header_bytes)
-        ok, message = verify_plain_proof_for_cert_version(job.cert_version, header, proof)
+        try:
+            ok, message = _upstream(verify_plain_proof_for_cert_version, job.cert_version, header, proof)
+        except ValueError as e:
+            ok, message = False, str(e)
         if not ok:
             return v.reject("valid_proof", f"proof verification failed: {message}")
 
@@ -126,6 +145,26 @@ class Verifier:
         v.work = TILE_OUTPUTS * proof.k / v.win_probability
         v.accepted, v.reason = True, "ok"
         return v
+
+
+def _header_bytes(mining_job: object) -> bytes | None:
+    if not isinstance(mining_job, dict) or not isinstance(mining_job.get("incomplete_header_bytes"), str):
+        return None
+    try:
+        return base64.b64decode(mining_job["incomplete_header_bytes"], validate=True)
+    except ValueError:
+        return None
+
+
+def _upstream(fn: Callable[..., T], *args: object) -> T:
+    """Calls into pearl_mining, and raises a Rust panic in it as a ValueError."""
+    try:
+        return fn(*args)
+    except BaseException as e:
+        # pyo3 raises a panic as PanicException, which derives from BaseException and isn't importable.
+        if type(e).__name__ != "PanicException":
+            raise
+        raise ValueError(f"upstream panicked: {e}") from e
 
 
 class VerifierService:
@@ -147,13 +186,13 @@ class VerifierService:
     def handle(self, rfile: BinaryIO, wfile: BinaryIO) -> None:
         answer(rfile, wfile, self.dispatch)
 
-    def dispatch(self, method: str, params: dict) -> dict:
+    def dispatch(self, method: str, params: object) -> dict:
         if method == "getMiningInfo":
             return self.verifier.issue(params).to_dict()
         if method == "submitPlainProof":
             if self.on_submission is not None:
                 self.on_submission(time.time(), params)
-            verdict = self.verifier.check(params["plain_proof"], params["mining_job"])
+            verdict = self.verifier.check_submission(params)
             self._log(verdict)
             return {"accepted": verdict.accepted, "reason": verdict.reason}
         raise ValueError(f"Method {method} not found")
