@@ -37,6 +37,7 @@ POD_REPO = "/root/pouw"
 POD_SESSION = "/root/session.json"
 SESSIONS = ROOT / "results" / "sessions"
 IMAGE = "nvidia/cuda:13.0.3-devel-ubuntu24.04"
+HOST_CUDA_VERSIONS = ["13.0", "13.1", "13.2"]
 SSH_WAIT_S = 900
 SETUP_TIMEOUT_S = 7200
 RECORD_TIMEOUT_S = 5400
@@ -102,7 +103,7 @@ def rent(args):
             cloud_type=args.cloud,
             container_disk_in_gb=args.disk,
             ports="22/tcp",
-            allowed_cuda_versions=["13.0"],
+            allowed_cuda_versions=HOST_CUDA_VERSIONS,
             docker_args=START.format(cap_s=int(args.max_hours * 3600)),
         )["id"]
     except Exception as err:
