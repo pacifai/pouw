@@ -19,7 +19,7 @@ from typing import BinaryIO, Callable
 from pearl_mining import IncompleteBlockHeader, PlainProof, verify_plain_proof_for_cert_version
 
 from .jobs import MAX_GPU_ID_LEN, Job, JobIssuer
-from .proof import TILE_OUTPUTS, config_from_indices, job_key
+from .proof import TILE_OUTPUTS, config_from_indices, gpu_config, job_key
 from .protocol import answer, start_server
 from .target import win_probability
 from .weights import DeclaredWeights
@@ -27,7 +27,7 @@ from .weights import DeclaredWeights
 CHECKS = {
     "issued_job": "The proof's job was issued by this verifier, with its target and version unchanged",
     "on_time": "The job is no older than the maximum age",
-    "valid_proof": "Upstream's verify function recomputes the tile from the opened rows and columns, and it wins",
+    "valid_proof": "The proof uses the GPU prover's tile and noise rank, and upstream's verify finds the tile wins",
     "declared_weights": "The weight matrix's Merkle root matches one of the declared model's matrices",
     "new_tile": "Nobody submitted this tile before",
 }
@@ -98,12 +98,15 @@ class Verifier:
         v.m, v.n, v.k = proof.m, proof.n, proof.k
         v.a_rows, v.b_cols = list(proof.a.row_indices), list(proof.bt.row_indices)
 
+        config = config_from_indices(proof.k, proof.noise_rank, v.a_rows, v.b_cols)
+        if config.to_bytes() != gpu_config(proof.k).to_bytes():
+            return v.reject("valid_proof", "tile pattern or noise rank differs from the GPU prover's")
+
         header = IncompleteBlockHeader.from_bytes(header_bytes)
         ok, message = verify_plain_proof_for_cert_version(job.cert_version, header, proof)
         if not ok:
             return v.reject("valid_proof", f"proof verification failed: {message}")
 
-        config = config_from_indices(proof.k, proof.noise_rank, v.a_rows, v.b_cols)
         v.weight = self.weights.match(job_key(header_bytes, config), proof.n, proof.k, bytes(proof.bt.root))
         if v.weight is None:
             return v.reject("declared_weights", "weight matrix is not one of the declared model's matrices")

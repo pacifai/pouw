@@ -99,6 +99,18 @@ def test_losing_tile_is_rejected(verifier, checkpoint):
     assert verdict.reason.startswith("proof verification failed")
 
 
+def test_smaller_tile_is_rejected(verifier, checkpoint):
+    # Upstream's verify accepts a 2 x 16 tile, which wins as often per output as
+    # the GPU's 2 x 64 tile, so crediting it as a full tile would count 4x the work.
+    job, job_dict = _job(verifier)
+    Bt = checkpoint["model.layers.0.self_attn.o_proj.weight"]
+    verdict = verifier.check(_prove(job, Bt, cols_pattern=COLS_PATTERN[:16]).to_base64(), job_dict)
+    assert not verdict.accepted
+    assert verdict.check == "valid_proof"
+    assert verdict.reason.startswith("tile pattern")
+    assert verdict.work == 0
+
+
 def test_replayed_proof_is_rejected(verifier, checkpoint):
     job, job_dict = _job(verifier)
     proof = _prove(job, checkpoint["model.layers.0.self_attn.o_proj.weight"]).to_base64()
