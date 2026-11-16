@@ -143,9 +143,10 @@ class VerifierService:
         if method == "getMiningInfo":
             return self.verifier.issue(params).to_dict()
         if method == "submitPlainProof":
+            now = time.time()
             if self.on_submission is not None:
-                self.on_submission(time.time(), params)
-            verdict = self.verifier.check(params["plain_proof"], params["mining_job"])
+                self.on_submission(now, params)
+            verdict = self.verifier.check(params["plain_proof"], params["mining_job"], now)
             self._log(verdict)
             return {"accepted": verdict.accepted, "reason": verdict.reason}
         raise ValueError(f"Method {method} not found")

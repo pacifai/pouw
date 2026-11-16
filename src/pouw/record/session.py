@@ -18,7 +18,7 @@ from ..cheats import CHEATS
 from ..cheats.relay import submission_hash
 from ..verifier import CHECKS, Verdict
 from ..weights import DeclaredWeights
-from .recorder import load, replay_verifier
+from .recorder import load, replay
 
 FORMAT = "pouw.session.v2"
 CHANGED_MODEL = "changed_model"
@@ -78,11 +78,9 @@ def build_run(run_dir: Path, weights: DeclaredWeights) -> dict:
 
 
 def _check_again(run_dir, recording, weights, serving_since: float, changed_model: bool) -> list[dict]:
-    verifier = replay_verifier(recording, weights)
     cheats = CheatLabels(run_dir / "cheats.jsonl")
     proofs = []
-    for arrival, submission in recording.submissions:
-        verdict = verifier.check(submission["plain_proof"], submission["mining_job"], now=arrival)
+    for (arrival, submission), verdict in zip(recording.submissions, replay(recording, weights)):
         mark = cheats.label(submission)
         cheat = CHANGED_MODEL if changed_model else mark and mark["cheat"]
         proofs.append(_proof(round(arrival - serving_since, TIME_DECIMALS), verdict, cheat, mark))
