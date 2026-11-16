@@ -64,8 +64,9 @@ The command shows the hourly price and waits for approval. It rents an NVIDIA
 H100, builds upstream's plugin, and records three runs: honest, with cheated
 proofs, and with a changed model. It saves a session file to
 `results/sessions/` and the raw runs to `runs/`, then terminates the pod. A
-session takes about 1.5 hours. Add `--shapes` to also measure the share of the
-GPU's work that earned proofs.
+session takes about 1.5 hours. Add `--shapes` to log the shape of every 7-bit
+multiplication, which the session file needs for each run's noisy and proven
+shares.
 
 ## How it works
 
@@ -102,14 +103,16 @@ The [decision records](docs/decisions/) give the reasoning behind each check.
 ## Cheats
 
 The cheat relay (`python -m pouw relay`) sits between the GPU and the
-verifier and sends cheated copies of real proofs. The changed model is a copy
+verifier and sends cheated copies of real proofs. For the easier target, it
+searches for a tile with the CPU prover, which takes about a second. The changed model is a copy
 of the checkpoint with one weight changed in every matrix the plugin proves.
 
 | Cheat | Prover's action | Rejected by | H100 run |
 |---|---|---|---|
 | Changed model | Serves a copy of the model with one weight changed per matrix | Declared weights | 72 of 72 |
 | Edited proof | Changes one activation in a real proof by one | Valid proof | 5 of 5 |
-| Easier target | Rewrites the job's target to one 256 times easier | Issued job | 5 of 5 |
+| Easier target | Sends a tile, proven under a real job with the declared weights, that wins only against a target 100,000 times easier | Valid proof | Not yet recorded |
+| Edited target | Rewrites the target sent back with a real proof to one 256 times easier | Issued job | 5 of 5 |
 | Another GPU's job | Submits a real proof under a job issued to another GPU | Valid proof | 5 of 5 |
 | Replay | Sends a proof a second time | New tile, or on time | 6 of 6 |
 | Late proof | Holds a proof until its job expires | On time | 5 of 5 |
@@ -144,15 +147,15 @@ the session of 2026-11-10):
 | Proofs on, with [`patches/0001`](patches/README.md) | 21.5 s |
 | Proofs on, upstream unchanged | 32.4 s |
 
-Work estimate: in one run, 197 accepted proofs implied 5.16 × 10¹⁵
-multiply-adds. The plugin's own count was 5.29 × 10¹⁵, 2.4% higher and within
-the estimate's expected spread of about 7%.
+Work estimate: in the 2026-10-11 session's honest run, 197 accepted proofs
+implied 5.16 × 10¹⁵ multiply-adds. The plugin's own count was 5.29 × 10¹⁵,
+2.4% higher and within the estimate's expected spread of about 7%.
 
 Coverage: only layers stored as 7-bit integers use the noisy multiplication,
 about 67% of the model's multiply-adds, and the plugin skips batches under
-1,024 tokens. In H100 runs on 2026-10-11, 97% of the 7-bit work earned
-proofs with 2,048-token prompts, and 40% with 256-token prompts and 512-token
-answers.
+1,024 tokens. In H100 runs on 2026-10-11, 97% of the 7-bit work ran the
+noisy multiplication with 2,048-token prompts, and 40% with 256-token prompts
+and 512-token answers.
 
 ## Session files
 
@@ -161,6 +164,14 @@ verifier, with the check that rejected it and the cheat behind it. The
 [demo site](https://pacifai.github.io/compute-verification-demo/) replays one.
 `python -m pouw session` writes one from recorded runs. For runs downloaded
 from a pod, pass the declared model's safetensors files with `--weights`.
+
+Runs recorded with `--shapes` also hold two shares of the 7-bit multiply-adds
+done after vLLM started serving:
+
+| Field | Share of the 7-bit multiply-adds |
+|---|---|
+| `noisy_share` | That ran the noisy multiplication, as the plugin logged it |
+| `proven_share` | That accepted proofs stand for: the sum of their estimated work. It is a statistical estimate, with a relative spread of about one over the square root of the number of accepted proofs |
 
 ## Security
 

@@ -13,6 +13,7 @@ import json
 import random
 import time
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 from pearl_mining import (
@@ -57,23 +58,47 @@ def prove(
     cols_pattern other than the GPU's makes a tile the verifier must refuse.
     Returns the proof, or None, and the number of tiles tried.
     """
+    header = IncompleteBlockHeader.from_bytes(header_bytes)
+
+    def wanted(proof: PlainProof) -> bool:
+        return verify_plain_proof_for_cert_version(cert_version, header, proof)[0] == want_win
+
+    return search(header_bytes, A, Bt, wanted, max_tiles, seed, cols_pattern=cols_pattern)
+
+
+def search(
+    header_bytes: bytes,
+    A: np.ndarray,
+    Bt: np.ndarray,
+    wanted: Callable[[PlainProof], bool],
+    max_tiles: int = MAX_TILES,
+    seed: int | None = None,
+    deadline: float | None = None,
+    cols_pattern: list[int] = COLS_PATTERN,
+) -> tuple[PlainProof | None, int]:
+    """Tries tiles of A·B, in the given column pattern, until wanted(proof) holds or time.monotonic() passes deadline.
+
+    Returns the proof, or None, and the number of tiles tried.
+    """
     m, k = A.shape
     n, _ = Bt.shape
     key = job_key(header_bytes, config_from_indices(k, NOISE_RANK, ROWS_PATTERN, cols_pattern))
     tree_a = MerkleTree.from_buffer(np.ascontiguousarray(A), key)
     tree_b = MerkleTree.from_buffer(np.ascontiguousarray(Bt), key)
-    header = IncompleteBlockHeader.from_bytes(header_bytes)
 
     tiles = [(r, c) for r in tile_starts(ROWS_PATTERN, m) for c in tile_starts(cols_pattern, n)]
     random.Random(seed).shuffle(tiles)
-    for tried, (r, c) in enumerate(tiles[:max_tiles], start=1):
-        rows = [r + d for d in ROWS_PATTERN]
-        cols = [c + d for d in cols_pattern]
-        proof = _package(A.shape, Bt.shape, rows, cols, tree_a, tree_b)
-        ok, _ = verify_plain_proof_for_cert_version(cert_version, header, proof)
-        if ok == want_win:
+    tried = 0
+    for r, c in tiles[:max_tiles]:
+        if deadline is not None and time.monotonic() > deadline:
+            break
+        tried += 1
+        proof = _package(
+            A.shape, Bt.shape, [r + d for d in ROWS_PATTERN], [c + d for d in cols_pattern], tree_a, tree_b
+        )
+        if wanted(proof):
             return proof, tried
-    return None, min(len(tiles), max_tiles)
+    return None, tried
 
 
 def _package(

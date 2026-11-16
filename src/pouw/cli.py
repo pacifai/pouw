@@ -8,7 +8,7 @@ import threading
 from pathlib import Path
 
 from . import checkpoint, prover, summary
-from .cheats import all_cheats
+from .cheats import all_cheats, load_matrix
 from .cheats.relay import Relay
 from .jobs import INTERVAL_S, MAX_AGE_S, JobIssuer
 from .protocol import DEFAULT_SOCKET, stop_server
@@ -20,6 +20,8 @@ from .verifier import Verifier, VerifierService
 from .weights import DeclaredWeights
 
 VERIFIER_SOCKET = "/tmp/verifier.sock"
+# The smallest matrix in a Llama 3.1 8B layer, so the relay hashes little per cheat.
+EASIER_TARGET_MATRIX = "model.layers.0.self_attn.o_proj.weight"
 LOCALHOST = "127.0.0.1"
 
 
@@ -42,7 +44,7 @@ def prove(args: argparse.Namespace) -> None:
 
 
 def relay(args: argparse.Namespace) -> None:
-    cheats = all_cheats(max_age_s=args.max_age)
+    cheats = all_cheats(max_age_s=args.max_age, matrix=load_matrix(args.weights, args.matrix))
     server = Relay(args.verifier, _ready(args.log), cheats, args.every, args.start_after).start(args.listen)
     _serve_until_interrupted(server, f"{args.listen}, relaying to {args.verifier}")
 
@@ -134,6 +136,8 @@ def parser() -> argparse.ArgumentParser:
     c.add_argument("--every", type=int, default=8, help="send a cheat after every N-th honest proof")
     c.add_argument("--start-after", type=int, default=4, help="honest proofs to pass before the first cheat")
     c.add_argument("--max-age", type=float, default=MAX_AGE_S, help="the verifier's maximum job age, in seconds")
+    c.add_argument("--weights", nargs="+", type=Path, required=True, help="safetensors files of the declared model")
+    c.add_argument("--matrix", default=EASIER_TARGET_MATRIX, help="declared matrix the easier-target cheat proves with")
 
     c = commands.add_parser("session", help="check recorded runs again and write the session file")
     c.set_defaults(run=session)

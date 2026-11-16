@@ -19,9 +19,11 @@
 # once). RELAY=1 puts the cheat relay between the plugin and the verifier,
 # with RELAY_ARGS passed to it. MAX_AGE sets the oldest job a proof may use,
 # in seconds, for both the verifier and the relay. VERIFY_WEIGHTS sets the checkpoint the
-# verifier declares, if it differs from the one vLLM serves. DESCRIPTION and
-# both checkpoints go into run.json, which the session file reads. RUNS sets the
-# folder that holds the run's folder.
+# verifier declares, if it differs from the one vLLM serves, and CHANGED_MODEL=1
+# marks vLLM's checkpoint as a changed copy of it. DESCRIPTION, both
+# checkpoints, CHANGED_MODEL, and the versions of the code and the declared
+# model go into run.json, which the session file reads. RUNS sets the folder
+# that holds the run's folder.
 set -euo pipefail
 
 MODEL="${MODEL:-/root/model}"
@@ -41,12 +43,34 @@ RELAY="${RELAY:-0}"
 RELAY_ARGS="${RELAY_ARGS:-}"
 MAX_AGE="${MAX_AGE:-}"
 VERIFY_WEIGHTS="${VERIFY_WEIGHTS:-$MODEL}"
+CHANGED_MODEL="${CHANGED_MODEL:-0}"
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LABEL="${LABEL:-$([ "$NO_MINING" = 1 ] && echo plain || echo noisy)-$(date +%H%M%S)}"
 OUT="${RUNS:-/root/pouw/runs}/$LABEL"
 SOCKET=/tmp/pearlgw.sock
 mkdir -p "$OUT"
-"$PY" -c 'import json, sys; print(json.dumps(dict(zip(["description", "model", "declared_model"], sys.argv[1:]))))' \
-  "${DESCRIPTION:-$LABEL}" "$MODEL" "$VERIFY_WEIGHTS" > "$OUT/run.json"
+# record.py ships the repository without .git, so it writes the commit to .commit.
+POUW_COMMIT=$(cat "$REPO/.commit" 2>/dev/null || git -C "$REPO" describe --always --dirty --abbrev=40 2>/dev/null || true)
+UPSTREAM_COMMIT=$(git -C "$UPSTREAM" rev-parse HEAD 2>/dev/null || true)
+# hf download --local-dir keeps the checkpoint's commit on the first line of each file's metadata.
+MODEL_REVISION=$(head -1 "$VERIFY_WEIGHTS/.cache/huggingface/download/config.json.metadata" 2>/dev/null || true)
+"$PY" - "$OUT/run.json" "$REPO/patches" "${DESCRIPTION:-$LABEL}" "$MODEL" "$VERIFY_WEIGHTS" "$CHANGED_MODEL" \
+  "$POUW_COMMIT" "$UPSTREAM_COMMIT" "$MODEL_REVISION" <<'PY'
+import hashlib, json, pathlib, sys
+out, patch_dir, description, model, declared, changed, pouw, upstream, revision = sys.argv[1:]
+patches = sorted(pathlib.Path(patch_dir).glob("*.patch"))
+meta = {
+    "description": description,
+    "model": model,
+    "declared_model": declared,
+    "changed_model": changed == "1",
+    "pouw_commit": pouw or None,
+    "upstream_commit": upstream or None,
+    "patches_sha256": hashlib.sha256(b"".join(p.read_bytes() for p in patches)).hexdigest() if patches else None,
+    "declared_model_revision": revision or None,
+}
+pathlib.Path(out).write_text(json.dumps(meta, indent=2) + "\n")
+PY
 export PATH="$UPSTREAM/.venv/bin:/usr/local/cuda/bin:$PATH"
 
 pids=()
@@ -75,7 +99,7 @@ head -2 "$OUT/verifier.out"
 if [ "$RELAY" = 1 ]; then
   echo "== cheat relay"
   # shellcheck disable=SC2086  # RELAY_ARGS is a list of flags
-  $POUW relay --listen "$SOCKET" --verifier "$VERIFIER_SOCKET" \
+  $POUW relay --listen "$SOCKET" --verifier "$VERIFIER_SOCKET" --weights "$VERIFY_WEIGHTS"/*.safetensors \
     --log "$OUT/cheats.jsonl" "${max_age_args[@]}" $RELAY_ARGS > "$OUT/relay.out" 2>&1 &
   pids+=($!)
   relay_pid=$!
