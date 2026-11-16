@@ -64,8 +64,9 @@ The command shows the hourly price and waits for approval. It rents an NVIDIA
 H100, builds upstream's plugin, and records three runs: honest, with cheated
 proofs, and with a changed model. It saves a session file to
 `results/sessions/` and the raw runs to `runs/`, then terminates the pod. A
-session takes about 1.5 hours. Add `--shapes` to also measure the share of the
-GPU's work that earned proofs.
+session takes about 1.5 hours. Add `--shapes` to log the shape of every 7-bit
+multiplication, which the session file needs for each run's noisy and proven
+shares.
 
 ## How it works
 
@@ -150,9 +151,9 @@ the estimate's expected spread of about 7%.
 
 Coverage: only layers stored as 7-bit integers use the noisy multiplication,
 about 67% of the model's multiply-adds, and the plugin skips batches under
-1,024 tokens. In H100 runs on 2026-10-11, 97% of the 7-bit work earned
-proofs with 2,048-token prompts, and 40% with 256-token prompts and 512-token
-answers.
+1,024 tokens. In H100 runs on 2026-10-11, 97% of the 7-bit work ran the
+noisy multiplication with 2,048-token prompts, and 40% with 256-token prompts
+and 512-token answers.
 
 ## Session files
 
@@ -161,6 +162,14 @@ verifier, with the check that rejected it and the cheat behind it. The
 [demo site](https://pacifai.github.io/compute-verification-demo/) replays one.
 `python -m pouw session` writes one from recorded runs. For runs downloaded
 from a pod, pass the declared model's safetensors files with `--weights`.
+
+Runs recorded with `--shapes` also hold two shares of the 7-bit multiply-adds
+done after vLLM started serving:
+
+| Field | Share of the 7-bit multiply-adds |
+|---|---|
+| `noisy_share` | That ran the noisy multiplication, as the plugin logged it |
+| `proven_share` | That accepted proofs stand for: the sum of their estimated work. It is a statistical estimate, with a relative spread of about one over the square root of the number of accepted proofs |
 
 ## Security
 

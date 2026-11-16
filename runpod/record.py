@@ -226,7 +226,7 @@ def main():
         help="SSH private key registered on the account (default: POUW_SSH_KEY)",
     )
     p.add_argument("--max-hours", type=float, default=3, help="the pod deletes itself this long after it starts")
-    p.add_argument("--shapes", action="store_true", help="log every GEMM's shape, and add each run's proven share")
+    p.add_argument("--shapes", action="store_true", help="log GEMM shapes, for each run's noisy and proven shares")
     p.add_argument("--yes", "-y", action="store_true", help="rent without asking")
     args = p.parse_args()
 

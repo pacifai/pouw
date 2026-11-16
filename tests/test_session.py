@@ -14,7 +14,7 @@ from pouw.jobs import JobIssuer
 from pouw.protocol import RpcClient, stop_server
 from pouw.prover import prove, random_activations
 from pouw.record.recorder import Recorder
-from pouw.record.session import FORMAT, build, proven_share
+from pouw.record.session import FORMAT, GemmWork, build
 from pouw.target import bits_for_win_probability
 from pouw.verifier import Verifier, VerifierService
 from pouw.weights import DeclaredWeights
@@ -96,10 +96,10 @@ def test_session_marks_every_cheat_with_the_check_that_caught_it(tmp_path):
     assert changed_run["proofs"] and all(
         p["cheat"] == "changed_model" and p["check"] == "declared_weights" for p in changed_run["proofs"]
     )
-    assert relay_run["proven_share"] is None
+    assert relay_run["noisy_share"] is None and relay_run["proven_share"] is None
 
 
-def test_proven_share_counts_only_work_after_serving_started(tmp_path):
+def test_shares_count_only_work_after_serving_started(tmp_path):
     shapes = tmp_path / "gemm_shapes.jsonl"
     rows = [
         {"time": 1.0, "m": 4096, "n": 10, "k": 10, "noisy": True},
@@ -108,8 +108,16 @@ def test_proven_share_counts_only_work_after_serving_started(tmp_path):
         {"time": 5.0, "m": 1536, "n": 10, "k": 10, "noisy": False},
     ]
     shapes.write_text("\n".join(json.dumps(r) for r in rows))
-    assert proven_share(shapes, since=2.0) == 0.5
-    assert proven_share(tmp_path / "missing.jsonl", since=0) is None
+    work = GemmWork.read(shapes, since=2.0)
+    assert work.noisy_share() == 0.5
+    proofs = [
+        {"t": -1.0, "accepted": True, "work": 100_000},
+        {"t": 0.5, "accepted": True, "work": 102_400},
+        {"t": 1.0, "accepted": False, "work": 0},
+        {"t": 2.0, "accepted": True, "work": 102_400},
+    ]
+    assert work.proven_share(proofs) == 0.5
+    assert GemmWork.read(tmp_path / "missing.jsonl", since=0) is None
 
 
 def test_missing_declared_weights_are_an_error(tmp_path):

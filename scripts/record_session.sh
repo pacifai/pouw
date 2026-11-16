@@ -13,7 +13,8 @@
 #
 # Usage: bash scripts/record_session.sh OUT [--shapes]
 # --shapes logs every int7 GEMM's shape (patches/0003), and the session file
-# then holds each run's proven share. Exit: 0 every run recorded, 1 a run failed.
+# then holds each run's noisy and proven shares.
+# Exit: 0 every run recorded, 1 a run failed.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
