@@ -19,6 +19,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import BinaryIO, Callable, TypeVar
 
+from blake3 import blake3
 from pearl_mining import IncompleteBlockHeader, PlainProof, verify_plain_proof_for_cert_version
 
 from .jobs import MAX_GPU_ID_LEN, Job, JobIssuer
@@ -28,6 +29,8 @@ from .target import win_probability
 from .weights import DeclaredWeights
 
 T = TypeVar("T")
+
+TILE_HASH_BYTES = 16
 
 CHECKS = {
     "issued_job": "The proof's job was issued by this verifier, with its target and version unchanged",
@@ -66,8 +69,10 @@ class Verifier:
         self.issuer = issuer
         self.weights = weights
         self.attribute_gpus = attribute_gpus
-        self._seen_tiles: set[tuple] = set()
+        # Hashes of the tiles submitted for each job the issuer still knows.
+        self._seen_tiles: dict[bytes, set[bytes]] = {}
         self._lock = threading.Lock()
+        issuer.on_forget = self._forget_tiles
 
     def issue(self, params: dict | None = None, now: float | None = None) -> Job:
         """The job for a getMiningInfo request: the requesting GPU's own, or the shared one."""
@@ -135,16 +140,22 @@ class Verifier:
         if v.weight is None:
             return v.reject("declared_weights", "weight matrix is not one of the declared model's matrices")
 
-        tile = (header_bytes, bytes(proof.a.root), bytes(proof.bt.root), tuple(v.a_rows), tuple(v.b_cols))
+        tile = _tile_hash(bytes(proof.a.root), bytes(proof.bt.root), v.a_rows, v.b_cols)
         with self._lock:
-            if tile in self._seen_tiles:
+            seen = self._seen_tiles.setdefault(header_bytes, set())
+            if tile in seen:
                 return v.reject("new_tile", "duplicate: this tile was already submitted")
-            self._seen_tiles.add(tile)
+            seen.add(tile)
 
         v.win_probability = win_probability(job.target, config)
         v.work = TILE_OUTPUTS * proof.k / v.win_probability
         v.accepted, v.reason = True, "ok"
         return v
+
+    def _forget_tiles(self, headers: list[bytes]) -> None:
+        with self._lock:
+            for header in headers:
+                self._seen_tiles.pop(header, None)
 
 
 def _header_bytes(mining_job: object) -> bytes | None:
@@ -154,6 +165,14 @@ def _header_bytes(mining_job: object) -> bytes | None:
         return base64.b64decode(mining_job["incomplete_header_bytes"], validate=True)
     except ValueError:
         return None
+
+
+def _tile_hash(a_root: bytes, bt_root: bytes, rows: list[int], cols: list[int]) -> bytes:
+    h = blake3(a_root + bt_root)
+    for indices in (rows, cols):
+        h.update(len(indices).to_bytes(8, "little"))
+        h.update(b"".join(i.to_bytes(8, "little") for i in indices))
+    return h.digest(length=TILE_HASH_BYTES)
 
 
 def _upstream(fn: Callable[..., T], *args: object) -> T:

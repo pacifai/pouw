@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 from pearl_mining import IncompleteBlockHeader, PlainProof, verify_plain_proof_for_cert_version
 
-from pouw.jobs import JobIssuer, new_job
+from pouw.jobs import KEEP_MAX_AGES, JobIssuer, new_job
 from pouw.proof import COLS_PATTERN, ROWS_PATTERN
 from pouw.protocol import RpcClient, stop_server
 from pouw.prover import prove, random_activations, tile_starts
@@ -142,6 +142,19 @@ def test_replayed_proof_is_rejected(verifier, checkpoint):
     verdict = verifier.check(proof, job_dict)
     assert not verdict.accepted
     assert verdict.check == "new_tile"
+
+
+def test_forgotten_job_drops_its_tiles(verifier, checkpoint):
+    issuer = verifier.issuer
+    job = issuer.current(now=0)
+    proof = _prove(job, checkpoint["model.layers.0.self_attn.o_proj.weight"]).to_base64()
+    assert verifier.check(proof, job.to_dict(), now=1).accepted
+    assert job.header_bytes in verifier._seen_tiles
+
+    later = KEEP_MAX_AGES * issuer.max_age_s + 1
+    issuer.current(now=later)
+    assert job.header_bytes not in verifier._seen_tiles
+    assert verifier.check(proof, job.to_dict(), now=later).check == "issued_job"
 
 
 def test_job_not_issued_here_is_rejected(verifier, checkpoint):

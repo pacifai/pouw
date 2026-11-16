@@ -91,12 +91,14 @@ class JobIssuer:
         self.max_age_s = max_age_s
         self.on_new_job = on_new_job
         self.forget_old = forget_old
+        self.on_forget: Callable[[list[bytes]], None] | None = None
         self._issued: dict[bytes, Job] = {}
         self._current: dict[str | None, Job] = {}
         self._lock = threading.Lock()
 
     def current(self, now: float | None = None, gpu_id: str | None = None) -> Job:
         now = time.time() if now is None else now
+        forgotten: list[bytes] = []
         with self._lock:
             job = self._current.get(gpu_id)
             if job is None or now - job.issued_at >= self.interval_s:
@@ -104,10 +106,12 @@ class JobIssuer:
                 self._current[gpu_id] = job
                 self._issued[job.header_bytes] = job
                 if self.forget_old:
-                    self._forget_before(now - KEEP_MAX_AGES * self.max_age_s)
+                    forgotten = self._forget_before(now - KEEP_MAX_AGES * self.max_age_s)
                 if self.on_new_job is not None:
                     self.on_new_job(job)
-            return job
+        if forgotten and self.on_forget is not None:
+            self.on_forget(forgotten)
+        return job
 
     def remember(self, job: Job) -> None:
         with self._lock:
@@ -117,6 +121,10 @@ class JobIssuer:
         with self._lock:
             return self._issued.get(header_bytes)
 
-    def _forget_before(self, cutoff: float) -> None:
-        self._issued = {h: j for h, j in self._issued.items() if j.issued_at >= cutoff}
+    def _forget_before(self, cutoff: float) -> list[bytes]:
+        """Drops the jobs issued before cutoff, and returns their headers."""
+        forgotten = [h for h, j in self._issued.items() if j.issued_at < cutoff]
+        for h in forgotten:
+            del self._issued[h]
         self._current = {g: j for g, j in self._current.items() if j.issued_at >= cutoff}
+        return forgotten
