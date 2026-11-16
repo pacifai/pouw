@@ -73,6 +73,6 @@ time. Without the variable, it does nothing.
 
 Proofs cover only the batches that used the noisy multiply. The share of
 int7 GEMM work that earned proofs also needs the batches under `min_m` that
-used the plain multiply. The session file reads the log for each run's proven
-share, and `runpod/record.py --shapes` turns it on. Leave it off for timing
+used the plain multiply. The session file reads the log for each run's noisy
+share and proven share, and `runpod/record.py --shapes` turns it on. Leave it off for timing
 runs, since it adds a Python call and file writes per GEMM.

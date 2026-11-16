@@ -24,8 +24,8 @@ CHEAT_DELAY_S = 0.2
 
 
 def submission_hash(submission: dict) -> str:
-    job = json.dumps(submission["mining_job"], sort_keys=True)
-    return hashlib.sha256((submission["plain_proof"] + "|" + job).encode()).hexdigest()
+    job = json.dumps(submission.get("mining_job"), sort_keys=True)
+    return hashlib.sha256((str(submission.get("plain_proof")) + "|" + job).encode()).hexdigest()
 
 
 class Relay:

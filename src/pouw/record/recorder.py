@@ -142,5 +142,5 @@ def replay(recording: Recording, weights: DeclaredWeights) -> list[Verdict]:
     verdicts = []
     for arrival, submission in recording.submissions:
         issuer.at(arrival)
-        verdicts.append(verifier.check(submission["plain_proof"], submission["mining_job"], now=arrival))
+        verdicts.append(verifier.check_submission(submission, now=arrival))
     return verdicts
