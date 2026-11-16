@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 from safetensors.numpy import save_file
 
-from pouw.cli import main
+from pouw.cli import _tcp, main
 from pouw.jobs import KEEP_MAX_AGES, JobIssuer
 from pouw.protocol import RpcClient, stop_server
 from pouw.prover import prove, random_activations
@@ -126,6 +126,16 @@ def test_gpu_ids_with_live_jobs_are_capped():
     # Once B's job is forgotten, its slot is free.
     later = 60 + KEEP_MAX_AGES * issuer.max_age_s - 1
     assert issuer.current(now=later, gpu_id="GPU-c").gpu_id == "GPU-c"
+
+
+def test_tcp_defaults_to_localhost():
+    assert _tcp("5000") == ("127.0.0.1", 5000)
+    assert _tcp("0.0.0.0:5000") == ("0.0.0.0", 5000)
+
+
+def test_verifier_refuses_remote_tcp_without_the_flag(tmp_path):
+    with pytest.raises(SystemExit, match="--allow-remote"):
+        main(["verify", "--weights", str(tmp_path / "none.safetensors"), "--tcp", "0.0.0.0:5000"])
 
 
 def test_cpu_prover_gpu_id_over_the_socket(verifier, checkpoint, tmp_path):

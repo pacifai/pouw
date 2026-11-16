@@ -165,7 +165,8 @@ from a pod, pass the declared model's safetensors files with `--weights`.
 ## Security
 
 The verifier trusts every client that connects to its socket. Run it only
-where access to the socket is controlled. To report a vulnerability, see
+where access to the socket is controlled. With `--tcp`, it listens on
+127.0.0.1 unless you pass `--allow-remote`. To report a vulnerability, see
 [SECURITY.md](SECURITY.md).
 
 ## Further reading

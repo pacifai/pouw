@@ -34,7 +34,8 @@ In scope:
 
 Out of scope, and open for discussion in public issues:
 
-- The verifier trusts every client that connects to its socket.
+- The verifier trusts every client that connects to its socket, or to its
+  TCP port. `--tcp` listens on 127.0.0.1 unless you pass `--allow-remote`.
 - A proof does not show that its activations came from real requests.
 - The GPU reports its own ID, and nothing signs it.
 - The open questions in [NEXT_STEPS.md](NEXT_STEPS.md).
