@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 import threading
+from concurrent.futures import Future
 from pathlib import Path
 
 import numpy as np
@@ -48,7 +49,7 @@ class DeclaredWeights:
             name: np.ascontiguousarray(t) for name, t in tensors.items() if t.dtype == np.int8 and t.ndim == 2
         }
         self._shapes = {t.shape for t in self.tensors.values()}
-        self._roots: dict[tuple[bytes, int, int], dict[bytes, str]] = {}
+        self._roots: dict[tuple[bytes, int, int], Future[dict[bytes, str]]] = {}
         self._lock = threading.Lock()
 
     @classmethod
@@ -70,12 +71,20 @@ class DeclaredWeights:
         cache_key = (key, n, k)
         with self._lock:
             roots = self._roots.get(cache_key)
-        if roots is None:
-            roots = {merkle_root(t, key): name for name, t in self.tensors.items() if t.shape == (n, k)}
-            with self._lock:
-                self._roots[cache_key] = roots
+            first = roots is None
+            if first:
+                roots = self._roots[cache_key] = Future()
                 self._forget_old_jobs()
-        return roots.get(root)
+        if first:
+            try:
+                roots.set_result({merkle_root(t, key): name for name, t in self.tensors.items() if t.shape == (n, k)})
+            except BaseException as e:
+                with self._lock:
+                    if self._roots.get(cache_key) is roots:
+                        del self._roots[cache_key]
+                roots.set_exception(e)
+                raise
+        return roots.result().get(root)
 
     def _forget_old_jobs(self) -> None:
         while len(self._roots) > CACHED_JOB_SHAPES:
