@@ -12,7 +12,7 @@ import pytest
 from safetensors.numpy import save_file
 
 from pouw.cli import main
-from pouw.jobs import JobIssuer
+from pouw.jobs import KEEP_MAX_AGES, JobIssuer
 from pouw.protocol import RpcClient, stop_server
 from pouw.prover import prove, random_activations
 from pouw.target import bits_for_win_probability
@@ -112,6 +112,20 @@ def test_missing_gpu_id_gets_the_shared_job(verifier, checkpoint):
 def test_malformed_gpu_id_is_refused(verifier, bad):
     with pytest.raises(ValueError):
         verifier.issue({"gpu_id": bad})
+
+
+def test_gpu_ids_with_live_jobs_are_capped():
+    issuer = JobIssuer(nbits=bits_for_win_probability(WIN, K), interval_s=60, max_age_s=60, max_gpu_ids=2)
+    issuer.current(now=0, gpu_id=GPU_A)
+    issuer.current(now=0, gpu_id=GPU_B)
+    with pytest.raises(ValueError, match="too many GPU IDs"):
+        issuer.current(now=0, gpu_id="GPU-c")
+    assert issuer.current(now=0).gpu_id is None
+    assert issuer.current(now=60, gpu_id=GPU_A).gpu_id == GPU_A
+
+    # Once B's job is forgotten, its slot is free.
+    later = 60 + KEEP_MAX_AGES * issuer.max_age_s - 1
+    assert issuer.current(now=later, gpu_id="GPU-c").gpu_id == "GPU-c"
 
 
 def test_cpu_prover_gpu_id_over_the_socket(verifier, checkpoint, tmp_path):

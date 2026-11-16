@@ -27,6 +27,8 @@ KEEP_MAX_AGES = 4
 
 GPU_ID_DOMAIN = b"pouw gpu id"
 MAX_GPU_ID_LEN = 128
+# With Llama's four matrix shapes, this many GPUs fill the cache of Merkle roots in weights.py.
+MAX_GPU_IDS = 256
 
 
 @dataclass(frozen=True)
@@ -85,33 +87,43 @@ class JobIssuer:
         max_age_s: float = MAX_AGE_S,
         on_new_job: Callable[[Job], None] | None = None,
         forget_old: bool = True,
+        max_gpu_ids: int = MAX_GPU_IDS,
     ):
         self.nbits = nbits
         self.interval_s = interval_s
         self.max_age_s = max_age_s
         self.on_new_job = on_new_job
         self.forget_old = forget_old
+        self.max_gpu_ids = max_gpu_ids
         self.on_forget: Callable[[list[bytes]], None] | None = None
         self._issued: dict[bytes, Job] = {}
         self._current: dict[str | None, Job] = {}
         self._lock = threading.Lock()
 
     def current(self, now: float | None = None, gpu_id: str | None = None) -> Job:
+        """The GPU's current job, issued now if it has none or it's older than interval_s.
+
+        Raises ValueError for a new GPU ID when max_gpu_ids IDs already hold live jobs.
+        """
         now = time.time() if now is None else now
         forgotten: list[bytes] = []
-        with self._lock:
-            job = self._current.get(gpu_id)
-            if job is None or now - job.issued_at >= self.interval_s:
-                job = new_job(self.nbits, now, gpu_id)
-                self._current[gpu_id] = job
-                self._issued[job.header_bytes] = job
-                if self.forget_old:
-                    forgotten = self._forget_before(now - KEEP_MAX_AGES * self.max_age_s)
-                if self.on_new_job is not None:
-                    self.on_new_job(job)
-        if forgotten and self.on_forget is not None:
-            self.on_forget(forgotten)
-        return job
+        try:
+            with self._lock:
+                job = self._current.get(gpu_id)
+                if job is None or now - job.issued_at >= self.interval_s:
+                    if self.forget_old:
+                        forgotten = self._forget_before(now - KEEP_MAX_AGES * self.max_age_s)
+                    if gpu_id is not None and gpu_id not in self._current and self._gpu_ids() >= self.max_gpu_ids:
+                        raise ValueError(f"too many GPU IDs: at most {self.max_gpu_ids} may hold live jobs")
+                    job = new_job(self.nbits, now, gpu_id)
+                    self._current[gpu_id] = job
+                    self._issued[job.header_bytes] = job
+                    if self.on_new_job is not None:
+                        self.on_new_job(job)
+                return job
+        finally:
+            if forgotten and self.on_forget is not None:
+                self.on_forget(forgotten)
 
     def remember(self, job: Job) -> None:
         with self._lock:
@@ -120,6 +132,9 @@ class JobIssuer:
     def lookup(self, header_bytes: bytes) -> Job | None:
         with self._lock:
             return self._issued.get(header_bytes)
+
+    def _gpu_ids(self) -> int:
+        return len(self._current) - (None in self._current)
 
     def _forget_before(self, cutoff: float) -> list[bytes]:
         """Drops the jobs issued before cutoff, and returns their headers."""
