@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import threading
 from pathlib import Path
 
@@ -21,9 +22,12 @@ from .weights import DeclaredWeights
 VERIFIER_SOCKET = "/tmp/verifier.sock"
 # The smallest matrix in a Llama 3.1 8B layer, so the relay hashes little per cheat.
 EASIER_TARGET_MATRIX = "model.layers.0.self_attn.o_proj.weight"
+LOCALHOST = "127.0.0.1"
 
 
 def verify(args: argparse.Namespace) -> None:
+    if args.tcp and not args.allow_remote and not _is_loopback(args.tcp[0]):
+        raise SystemExit(f"--tcp {args.tcp[0]} accepts connections from other hosts; pass --allow-remote to allow it")
     weights = DeclaredWeights.from_safetensors(args.weights)
     nbits = bits_for_win_probability(args.win_probability, args.k)
     issuer = JobIssuer(nbits, args.interval, args.max_age)
@@ -78,13 +82,24 @@ def _serve_until_interrupted(server, address: object) -> None:
 
 
 def _tcp(value: str) -> tuple[str, int]:
-    host, port = value.rsplit(":", 1)
-    return host, int(port)
+    host, _, port = value.rpartition(":")
+    return host or LOCALHOST, int(port)
+
+
+def _is_loopback(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def _add_address(p: argparse.ArgumentParser) -> None:
     p.add_argument("--socket", default=DEFAULT_SOCKET, help="Unix socket the plugin connects to")
-    p.add_argument("--tcp", type=_tcp, metavar="HOST:PORT", help="use TCP instead of a Unix socket")
+    p.add_argument(
+        "--tcp", type=_tcp, metavar="[HOST:]PORT", help=f"use TCP instead of a Unix socket, on {LOCALHOST} by default"
+    )
 
 
 def parser() -> argparse.ArgumentParser:
@@ -95,6 +110,7 @@ def parser() -> argparse.ArgumentParser:
     c.set_defaults(run=verify)
     c.add_argument("--weights", nargs="+", type=Path, required=True, help="safetensors files of the declared model")
     _add_address(c)
+    c.add_argument("--allow-remote", action="store_true", help="let --tcp listen on an address other hosts can reach")
     c.add_argument("--win-probability", type=float, default=1e-4, help="chance that one tile wins")
     c.add_argument("--k", type=int, default=4096, help="inner dimension the target is set for")
     c.add_argument("--interval", type=float, default=INTERVAL_S, help="seconds between new jobs")

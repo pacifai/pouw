@@ -47,6 +47,7 @@ class DeclaredWeights:
         self.tensors = {
             name: np.ascontiguousarray(t) for name, t in tensors.items() if t.dtype == np.int8 and t.ndim == 2
         }
+        self._shapes = {t.shape for t in self.tensors.values()}
         self._roots: dict[tuple[bytes, int, int], dict[bytes, str]] = {}
         self._lock = threading.Lock()
 
@@ -60,6 +61,9 @@ class DeclaredWeights:
                     if f.get_slice(name).get_dtype() == "I8":
                         tensors[name] = f.get_tensor(name)
         return cls(fuse_like_vllm(tensors) if fuse else tensors)
+
+    def has_shape(self, n: int, k: int) -> bool:
+        return (n, k) in self._shapes
 
     def match(self, key: bytes, n: int, k: int, root: bytes) -> str | None:
         """Name of the declared (n, k) matrix whose root under key is root, if any."""
