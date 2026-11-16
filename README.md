@@ -147,9 +147,9 @@ the session of 2026-11-10):
 | Proofs on, with [`patches/0001`](patches/README.md) | 21.5 s |
 | Proofs on, upstream unchanged | 32.4 s |
 
-Work estimate: in one run, 197 accepted proofs implied 5.16 × 10¹⁵
-multiply-adds. The plugin's own count was 5.29 × 10¹⁵, 2.4% higher and within
-the estimate's expected spread of about 7%.
+Work estimate: in the 2026-10-11 session's honest run, 197 accepted proofs
+implied 5.16 × 10¹⁵ multiply-adds. The plugin's own count was 5.29 × 10¹⁵,
+2.4% higher and within the estimate's expected spread of about 7%.
 
 Coverage: only layers stored as 7-bit integers use the noisy multiplication,
 about 67% of the model's multiply-adds, and the plugin skips batches under
