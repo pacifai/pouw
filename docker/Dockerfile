@@ -10,25 +10,17 @@ RUN apt-get update \
 RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
 ENV PATH=/root/.cargo/bin:$PATH
 
-# Pin the upstream code so the proof format and verify function can't move.
-ARG UPSTREAM_COMMIT=d7c517d267f10f5bcbbdc366f3e603942f9a5ab5
-RUN git init /opt/upstream \
- && cd /opt/upstream \
- && git remote add origin https://github.com/pearl-research-labs/pearl \
- && git fetch --depth 1 origin "$UPSTREAM_COMMIT" \
- && git checkout FETCH_HEAD
-
-# Apply this repo's changes to the upstream code. patches/README.md says what
-# each one does.
-COPY patches /opt/patches
-RUN cd /opt/upstream && git apply /opt/patches/*.patch
+# Check out upstream at the pinned commit, so the proof format and verify
+# function can't move, and apply this repo's patches.
+COPY patches /opt/pouw/patches
+COPY scripts/fetch_upstream.sh /opt/pouw/scripts/fetch_upstream.sh
+RUN bash /opt/pouw/scripts/fetch_upstream.sh /opt/upstream
 
 RUN pip install --no-cache-dir uv maturin \
  && cd /opt/upstream/py-pearl-mining \
  && maturin build --release -o /wheels
 
-COPY pyproject.toml /work/pyproject.toml
-RUN uv pip install --system /wheels/*.whl numpy safetensors blake3 pytest
-
 WORKDIR /work
+COPY pyproject.toml /work/pyproject.toml
+RUN uv pip install --system /wheels/*.whl -r pyproject.toml --group dev
 ENV PYTHONPATH=/work/src

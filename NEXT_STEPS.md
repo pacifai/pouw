@@ -32,8 +32,8 @@ record the result in the README or a decision record.
   questions: which providers offer H100s in that mode, and what the report
   shows about which GPU did the work.
 
-- [ ] **Measure more loads.** Proven share and overhead are measured only for
-  long prompts. Measure them for a decode-heavy load, and compare the
+- [ ] **Measure more loads.** The noisy share and the overhead are measured
+  only for long prompts. Measure them for a decode-heavy load, and compare the
   estimated work with the H100's peak rate.
 
 - [ ] **Does upstream's noise satisfy the paper's assumptions?** The paper

@@ -18,9 +18,9 @@ proof's work.
 
 ## Evidence
 
-- In one H100 run, 197 accepted proofs implied 5.16 × 10¹⁵ multiply-adds. A log
-  of every multiplication the plugin ran (`patches/0003`) counted 5.29 × 10¹⁵,
-  2.4% more. With about 200 proofs, the estimate's expected spread is about 7%.
+- In the honest run of the 2026-10-11 H100 session, 197 accepted proofs
+  implied 5.16 × 10¹⁵ multiply-adds. A log of every multiplication the plugin
+  ran (`patches/0003`) counted 5.29 × 10¹⁵, 2.4% more. With about 200 proofs, the estimate's expected spread is about 7%.
 - In an earlier run, 39 proofs implied 2.04 × 10¹⁵ multiply-adds, against
   1.93 × 10¹⁵ from the prompt tokens and the proven matrix shapes.
 

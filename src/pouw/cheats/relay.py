@@ -2,7 +2,7 @@
 
 After every `every`-th honest proof, it sends a cheated copy of that proof,
 cycling through its cheats, and logs one JSON line per cheated submission so a
-session file can mark it.
+session file can mark it. A cheat that doesn't apply logs why and sends nothing.
 """
 
 from __future__ import annotations
@@ -17,15 +17,15 @@ from pathlib import Path
 from typing import BinaryIO
 
 from ..protocol import RpcClient, answer, start_server
-from . import Cheat, Context
+from . import Cheat, Context, Skipped
 
 # The cheated copy follows the honest proof, so the verifier sees the honest one first.
 CHEAT_DELAY_S = 0.2
 
 
 def submission_hash(submission: dict) -> str:
-    job = json.dumps(submission["mining_job"], sort_keys=True)
-    return hashlib.sha256((submission["plain_proof"] + "|" + job).encode()).hexdigest()
+    job = json.dumps(submission.get("mining_job"), sort_keys=True)
+    return hashlib.sha256((str(submission.get("plain_proof")) + "|" + job).encode()).hexdigest()
 
 
 class Relay:
@@ -36,6 +36,7 @@ class Relay:
         self.every = every
         self.start_after = start_after
         self._job_seen_at: dict[str, float] = {}
+        self._job_params: dict[str, dict] = {}
         self._honest = 0
         self._sent = 0
         self._lock = threading.Lock()
@@ -62,6 +63,7 @@ class Relay:
         job = verifier.call("getMiningInfo", params)
         with self._lock:
             self._job_seen_at.setdefault(job["incomplete_header_bytes"], time.time())
+            self._job_params.setdefault(job["incomplete_header_bytes"], params)
         return job
 
     def _pass_proof(self, verifier: RpcClient, submission: dict) -> dict:
@@ -83,8 +85,14 @@ class Relay:
         time.sleep(CHEAT_DELAY_S)
         verifier = RpcClient(self.verifier_socket)
         try:
-            seen_at = self._job_seen_at.get(honest["mining_job"]["incomplete_header_bytes"], time.time())
-            cheated, changes = cheat.apply(honest, Context(verifier, seen_at))
+            job = honest["mining_job"]["incomplete_header_bytes"]
+            with self._lock:
+                ctx = Context(verifier, self._job_seen_at.get(job, time.time()), self._job_params.get(job))
+            try:
+                cheated, changes = cheat.apply(honest, ctx)
+            except Skipped as e:
+                self._write({"time": time.time(), "cheat": cheat.key, "skipped": str(e)})
+                return
             try:
                 result = verifier.call("submitPlainProof", cheated)
             except RuntimeError as e:
@@ -94,13 +102,18 @@ class Relay:
             verifier.close()
 
     def _log(self, cheat: Cheat, submission: dict, changes: list, result: dict) -> None:
-        line = {
-            "time": time.time(),
-            "cheat": cheat.key,
-            "hash": submission_hash(submission),
-            "changes": [asdict(c) for c in changes],
-            "result": result,
-            "repeat": cheat.resends_unchanged,
-        }
+        self._write(
+            {
+                "time": time.time(),
+                "cheat": cheat.key,
+                "hash": submission_hash(submission),
+                "changes": [asdict(c) for c in changes],
+                "result": result,
+                "repeat": cheat.resends_unchanged,
+            }
+        )
+
+    def _write(self, line: dict) -> None:
+        print(json.dumps(line), flush=True)
         with self._lock, self.log_path.open("a") as f:
             f.write(json.dumps(line) + "\n")

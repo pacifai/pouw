@@ -8,7 +8,7 @@
 Copies this tree to the pod, builds upstream's vLLM plugin with this repo's
 patches, records the honest, relay, and changed-model runs, and writes the
 session file to results/sessions/ and the raw runs to runs/. Then it
-terminates the pod. The pod also deletes itself after --max-hours.
+terminates the pod. The pod also stops itself after --max-hours, which ends GPU billing.
 
 Reads RUNPOD_API_KEY and POUW_SSH_KEY from the shell or the repo's .env.
 Run with: uv run runpod/record.py
@@ -37,14 +37,18 @@ POD_REPO = "/root/pouw"
 POD_SESSION = "/root/session.json"
 SESSIONS = ROOT / "results" / "sessions"
 IMAGE = "nvidia/cuda:13.0.3-devel-ubuntu24.04"
+HOST_CUDA_VERSIONS = ["13.0", "13.1", "13.2"]
 SSH_WAIT_S = 900
 SETUP_TIMEOUT_S = 7200
 RECORD_TIMEOUT_S = 5400
 # The CUDA image has no SSH server. The start command installs one, and first
-# arms a timer that deletes the pod through RunPod's API after the hard cap.
+# arms a timer that stops the pod through RunPod's API after the hard cap. The
+# key RunPod gives the pod may stop it but not delete it.
 START = (
-    "bash -c '(sleep {cap_s}; curl -s -X DELETE https://rest.runpod.io/v1/pods/$RUNPOD_POD_ID"
-    ' -H "Authorization: Bearer $RUNPOD_API_KEY") >/dev/null 2>&1 &'
+    'bash -c \'(sleep {cap_s}; curl -s -o /root/stop.out -w "%{{http_code}}\\n" -X POST'
+    " https://api.runpod.io/v2/pods/$RUNPOD_POD_ID/action"
+    ' -H "Authorization: Bearer $RUNPOD_API_KEY" -H "Content-Type: application/json"'
+    ' -d "{{\\"action\\":\\"stop\\"}}") >/root/stop.log 2>&1 &'
     " apt-get update -q >/dev/null && DEBIAN_FRONTEND=noninteractive apt-get install -y -q"
     " openssh-server git curl build-essential >/dev/null;"
     ' mkdir -p /run/sshd /root/.ssh && echo "$PUBLIC_KEY" > /root/.ssh/authorized_keys'
@@ -81,7 +85,7 @@ def confirm_price(args):
     if price is None:
         fail(f"no {args.cloud} price for {args.gpu}; not renting without one", 2)
     print(f"{args.gpu}, {args.cloud} cloud: ${price}/hr, stock {gpu.get('availability', '?')}")
-    print(f"A session takes about 1.5 hours. The pod deletes itself after {args.max_hours} hours at most.")
+    print(f"A session takes about 1.5 hours. The pod stops itself after {args.max_hours} hours at most.")
     if (
         not args.yes
         and input("\nRent it? It bills by the second until the recording ends. [y/N] ").strip().lower() != "y"
@@ -102,7 +106,7 @@ def rent(args):
             cloud_type=args.cloud,
             container_disk_in_gb=args.disk,
             ports="22/tcp",
-            allowed_cuda_versions=["13.0"],
+            allowed_cuda_versions=HOST_CUDA_VERSIONS,
             docker_args=START.format(cap_s=int(args.max_hours * 3600)),
         )["id"]
     except Exception as err:
@@ -135,7 +139,7 @@ def wait_for_ssh(pod_id, key):
 
 
 def ship(conn):
-    """Copies every file git would track, committed or not, to POD_REPO."""
+    """Copies every file git would track, committed or not, to POD_REPO, with the commit in .commit."""
     say("copying this working tree")
     listed = subprocess.run(
         ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
@@ -148,9 +152,20 @@ def ship(conn):
         for name in filter(None, listed.split("\0")):
             if (ROOT / name).is_file():
                 tar.add(ROOT / name, arcname=name)
+        commit = commit_id().encode()
+        info = tarfile.TarInfo(".commit")
+        info.size = len(commit)
+        tar.addfile(info, io.BytesIO(commit))
     archive.seek(0)
     conn.put(archive, "/root/pouw.tar.gz")
     conn.run(f"mkdir -p {POD_REPO} && tar xzf /root/pouw.tar.gz -C {POD_REPO}", hide=True)
+
+
+def commit_id():
+    """The checked-out commit, with -dirty if the working tree differs from it."""
+    return subprocess.run(
+        ["git", "describe", "--always", "--dirty", "--abbrev=40"], cwd=ROOT, capture_output=True, check=True, text=True
+    ).stdout.strip()
 
 
 def fetch(conn, stamp):
@@ -225,8 +240,8 @@ def main():
         default=os.environ.get("POUW_SSH_KEY"),
         help="SSH private key registered on the account (default: POUW_SSH_KEY)",
     )
-    p.add_argument("--max-hours", type=float, default=3, help="the pod deletes itself this long after it starts")
-    p.add_argument("--shapes", action="store_true", help="log every GEMM's shape, and add each run's proven share")
+    p.add_argument("--max-hours", type=float, default=3, help="the pod stops itself this long after it starts")
+    p.add_argument("--shapes", action="store_true", help="log GEMM shapes, for each run's noisy and proven shares")
     p.add_argument("--yes", "-y", action="store_true", help="rent without asking")
     args = p.parse_args()
 
