@@ -106,16 +106,18 @@ The cheat relay (`python -m pouw relay`) sits between the GPU and the
 verifier and sends cheated copies of real proofs. For the easier target, it
 searches for a tile with the CPU prover, which takes about a second. The changed model is a copy
 of the checkpoint with one weight changed in every matrix the plugin proves.
+The last column counts the cheated proofs rejected in the H100 session of
+2026-11-16.
 
 | Cheat | Prover's action | Rejected by | H100 run |
 |---|---|---|---|
-| Changed model | Serves a copy of the model with one weight changed per matrix | Declared weights | 72 of 72 |
-| Edited proof | Changes one activation in a real proof by one | Valid proof | 5 of 5 |
-| Easier target | Sends a tile, proven under a real job with the declared weights, that wins only against a target 100,000 times easier | Valid proof | Not yet recorded |
-| Edited target | Rewrites the target sent back with a real proof to one 256 times easier | Issued job | 5 of 5 |
-| Another GPU's job | Submits a real proof under a job issued to another GPU | Valid proof | 5 of 5 |
-| Replay | Sends a proof a second time | New tile, or on time | 6 of 6 |
-| Late proof | Holds a proof until its job expires | On time | 5 of 5 |
+| Changed model | Serves a copy of the model with one weight changed per matrix | Declared weights | 70 of 70 |
+| Edited proof | Changes one activation in a real proof by one | Valid proof | 4 of 4 |
+| Easier target | Sends a tile, proven under a real job with the declared weights, that wins only against a target 100,000 times easier | Valid proof | 3 of 3 |
+| Edited target | Rewrites the target sent back with a real proof to one 256 times easier | Issued job | 4 of 4 |
+| Another GPU's job | Submits a real proof under a job issued to another GPU | Valid proof | 4 of 4 |
+| Replay | Sends a proof a second time | New tile, or on time | 4 of 4 |
+| Late proof | Holds a proof until its job expires | On time | 4 of 4 |
 
 Two cheats pass. Both are known limits:
 
@@ -147,15 +149,17 @@ the session of 2026-11-10):
 | Proofs on, with [`patches/0001`](patches/README.md) | 21.5 s |
 | Proofs on, upstream unchanged | 32.4 s |
 
-Work estimate: in the 2026-10-11 session's honest run, 197 accepted proofs
-implied 5.16 × 10¹⁵ multiply-adds. The plugin's own count was 5.29 × 10¹⁵,
-2.4% higher and within the estimate's expected spread of about 7%.
+Work estimate: in the 2026-11-16 session's honest run, 214 accepted proofs
+implied 5.61 × 10¹⁵ multiply-adds. The plugin's own count was 5.35 × 10¹⁵, so
+the estimate was 4.8% high, within its expected spread of about 7%. In the run
+with the cheat relay, the 191 accepted honest proofs stood for 94% of the
+plugin's count, also within that spread.
 
 Coverage: only layers stored as 7-bit integers use the noisy multiplication,
 about 67% of the model's multiply-adds, and the plugin skips batches under
-1,024 tokens. In H100 runs on 2026-10-11, 97% of the 7-bit work ran the
-noisy multiplication with 2,048-token prompts, and 40% with 256-token prompts
-and 512-token answers.
+1,024 tokens. In the 2026-11-16 session, 97% of the 7-bit work ran the noisy
+multiplication with 2,048-token prompts. In a 2026-10-11 run with 256-token
+prompts and 512-token answers, 40% did.
 
 ## Session files
 
