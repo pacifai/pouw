@@ -1,0 +1,195 @@
+"""Recorded runs become a session file: the relay's cheats fail the expected checks and are marked."""
+
+import base64
+import json
+import time
+
+import numpy as np
+import pytest
+from pearl_mining import IncompleteBlockHeader, PlainProof, verify_plain_proof_for_cert_version
+from safetensors.numpy import save_file
+
+from pouw.cheats import CHEATS, Context, EasierTarget, OtherGpuJob, Skipped, all_cheats
+from pouw.cheats.relay import Relay
+from pouw.jobs import JobIssuer
+from pouw.protocol import RpcClient, stop_server
+from pouw.prover import prove, random_activations
+from pouw.record.recorder import Recorder
+from pouw.record.session import FORMAT, GemmWork, build
+from pouw.target import bits_for_win_probability, target_to_bits
+from pouw.verifier import Verifier, VerifierService
+from pouw.weights import DeclaredWeights
+
+K = 2048
+NAME = "model.layers.0.self_attn.o_proj.weight"
+EXPECTED = {
+    "replay": "new_tile",
+    "difficulty": "valid_proof",
+    "forged": "valid_proof",
+    "theft": "valid_proof",
+    "precompute": "on_time",
+    "edited_target": "issued_job",
+}
+# Easier by a factor that keeps the tests' 1 in 50 chance to win below one.
+EASIER_FACTOR = 10
+
+
+def _run_dir(path, model, declared, description, changed_model=False):
+    path.mkdir()
+    meta = {
+        "description": description,
+        "model": str(model),
+        "declared_model": str(declared),
+        "changed_model": changed_model,
+        "pouw_commit": "0123abc",
+    }
+    (path / "run.json").write_text(json.dumps(meta))
+    return path
+
+
+def _record(run_dir, Bt_declared, Bt_served, relay_every=None):
+    weights = DeclaredWeights({NAME: Bt_declared})
+    issuer = JobIssuer(nbits=bits_for_win_probability(1 / 50, K), interval_s=1, max_age_s=2)
+    service = VerifierService(Verifier(issuer, weights, attribute_gpus=True))
+    Recorder(run_dir / "recording.jsonl").attach(service, 1 / 50)
+    vsock, rsock = str(run_dir / "v.sock"), str(run_dir / "r.sock")
+    server = service.start(vsock)
+    relay_server = None
+    if relay_every:
+        cheats = all_cheats(max_age_s=2, matrix=Bt_declared, easier_factor=EASIER_FACTOR)
+        relay = Relay(vsock, run_dir / "cheats.jsonl", cheats, every=relay_every, start_after=0)
+        relay_server = relay.start(rsock)
+    (run_dir / "serving_since").write_text(str(time.time()))
+    try:
+        client = RpcClient(rsock if relay_every else vsock)
+        start = time.time()
+        for seed in range(len(CHEATS) if relay_every else 2):
+            job = client.call("getMiningInfo", {"gpu_id": "GPU-real"})
+            header = base64.b64decode(job["incomplete_header_bytes"])
+            proof, _ = prove(header, job["cert_version"], random_activations(128, K, seed=seed), Bt_served, seed=seed)
+            client.call("submitPlainProof", {"plain_proof": proof.to_base64(), "mining_job": job})
+            time.sleep(max(0.0, start + 0.8 * (seed + 1) - time.time()))
+        time.sleep(4 if relay_every else 0)
+        client.close()
+    finally:
+        if relay_server:
+            stop_server(relay_server)
+        stop_server(server)
+
+
+def test_session_marks_every_cheat_with_the_check_that_caught_it(tmp_path):
+    rng = np.random.default_rng(1)
+    Bt = rng.integers(-63, 64, size=(512, K), dtype=np.int8)
+    changed = Bt.copy()
+    changed[0, 0] = Bt[0, 0] + 1 if Bt[0, 0] < 63 else Bt[0, 0] - 1
+    declared = tmp_path / "declared"
+    declared.mkdir()
+    save_file({NAME: Bt}, str(declared / "model.safetensors"))
+
+    relay = _run_dir(tmp_path / "relay", declared, declared, "A relay sends cheated copies")
+    _record(relay, Bt, Bt, relay_every=1)
+    changed_model = _run_dir(tmp_path / "changed-model", tmp_path / "changed", declared, "A changed model", True)
+    _record(changed_model, Bt, changed)
+
+    session = build([relay, changed_model], gpu="CPU")
+    assert session["format"] == FORMAT
+    relay_run, changed_run = session["runs"]
+    assert session["recorded_utc"] == relay_run["started_utc"] <= changed_run["started_utc"]
+    assert relay_run["versions"]["pouw_commit"] == "0123abc" and relay_run["versions"]["upstream_commit"] is None
+    assert (relay_run["changed_model"], changed_run["changed_model"]) == (False, True)
+
+    cheated = [p for p in relay_run["proofs"] if p["cheat"]]
+    assert {p["cheat"] for p in cheated} == set(CHEATS)
+    for p in cheated:
+        assert not p["accepted"] and p["check"] == EXPECTED[p["cheat"]], p
+        assert p["changes"]
+    honest = [p for p in relay_run["proofs"] if not p["cheat"]]
+    assert honest and all(p["accepted"] and p["work"] > 0 for p in honest)
+
+    assert changed_run["proofs"] and all(
+        p["cheat"] == "changed_model" and p["check"] == "declared_weights" for p in changed_run["proofs"]
+    )
+    assert relay_run["noisy_share"] is None and relay_run["proven_share"] is None
+
+
+def test_shares_count_only_work_after_serving_started(tmp_path):
+    shapes = tmp_path / "gemm_shapes.jsonl"
+    rows = [
+        {"time": 1.0, "m": 4096, "n": 10, "k": 10, "noisy": True},
+        {"time": 3.0, "m": 2048, "n": 10, "k": 10, "noisy": True},
+        {"time": 4.0, "m": 512, "n": 10, "k": 10, "noisy": False},
+        {"time": 5.0, "m": 1536, "n": 10, "k": 10, "noisy": False},
+    ]
+    shapes.write_text("\n".join(json.dumps(r) for r in rows))
+    work = GemmWork.read(shapes, since=2.0)
+    assert work.noisy_share() == 0.5
+    proofs = [
+        {"t": -1.0, "accepted": True, "work": 100_000},
+        {"t": 0.5, "accepted": True, "work": 102_400},
+        {"t": 1.0, "accepted": False, "work": 0},
+        {"t": 2.0, "accepted": True, "work": 102_400},
+    ]
+    assert work.proven_share(proofs) == 0.5
+    assert GemmWork.read(tmp_path / "missing.jsonl", since=0) is None
+
+
+def test_run_json_without_changed_model_is_an_error(tmp_path):
+    run = _run_dir(tmp_path / "honest", "/root/model", "/root/model", "An older run")
+    meta = json.loads((run / "run.json").read_text())
+    del meta["changed_model"]
+    (run / "run.json").write_text(json.dumps(meta))
+    with pytest.raises(ValueError, match="lacks changed_model"):
+        build([run], gpu="CPU")
+
+
+def test_missing_declared_weights_are_an_error(tmp_path):
+    run = _run_dir(tmp_path / "honest", "/root/model", "/root/model", "Downloaded from a pod")
+    with pytest.raises(ValueError, match="--weights"):
+        build([run], gpu="CPU")
+
+
+def test_easier_target_proof_is_genuine_except_for_the_win():
+    Bt = np.random.default_rng(1).integers(-63, 64, size=(512, K), dtype=np.int8)
+    issuer = JobIssuer(nbits=bits_for_win_probability(1 / 50, K), interval_s=60, max_age_s=60)
+    verifier = Verifier(issuer, DeclaredWeights({NAME: Bt}), attribute_gpus=True)
+
+    class Client:
+        def call(self, method, params):
+            return verifier.issue(params).to_dict()
+
+    honest = {"plain_proof": "", "mining_job": verifier.issue({"gpu_id": "GPU-real"}).to_dict()}
+    cheat = EasierTarget(Bt, factor=EASIER_FACTOR)
+    cheated, changes = cheat.apply(honest, Context(Client(), 0.0, {"gpu_id": "GPU-real"}))
+
+    verdict = verifier.check(cheated["plain_proof"], cheated["mining_job"])
+    assert not verdict.accepted and verdict.check == "valid_proof", verdict
+    assert verdict.reason.startswith("proof verification failed")
+    assert (verdict.n, verdict.k) == Bt.shape and verdict.gpu_id == "GPU-real"
+    header = IncompleteBlockHeader.from_bytes(base64.b64decode(cheated["mining_job"]["incomplete_header_bytes"]))
+    proof = PlainProof.from_base64(cheated["plain_proof"])
+    easier_bits = target_to_bits(cheated["mining_job"]["target"] * EASIER_FACTOR)
+    assert verify_plain_proof_for_cert_version(3, header, proof, easier_bits)[0]
+    assert changes
+
+
+def test_easier_target_without_a_matrix_is_skipped():
+    with pytest.raises(Skipped, match="--weights"):
+        EasierTarget().apply({}, Context(None, 0.0))
+
+
+@pytest.mark.parametrize("attribute_gpus", [False, True])
+def test_theft_is_skipped_when_every_gpu_gets_the_shared_job(attribute_gpus):
+    issuer = JobIssuer(nbits=bits_for_win_probability(1 / 50, K), interval_s=60, max_age_s=60)
+    verifier = Verifier(issuer, DeclaredWeights({}), attribute_gpus=attribute_gpus)
+
+    class Client:
+        def call(self, method, params):
+            return verifier.issue(params).to_dict()
+
+    honest = {"plain_proof": "", "mining_job": verifier.issue({"gpu_id": "GPU-real"}).to_dict()}
+    if attribute_gpus:
+        cheated, _ = OtherGpuJob().apply(honest, Context(Client(), 0.0))
+        assert cheated["mining_job"] != honest["mining_job"]
+    else:
+        with pytest.raises(Skipped, match="attribution is off"):
+            OtherGpuJob().apply(honest, Context(Client(), 0.0))

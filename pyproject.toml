@@ -1,0 +1,23 @@
+[project]
+name = "pouw"
+version = "0.1.0"
+description = "Verifier for proof of useful work on inference, used to check that a GPU's inference matmuls ran on declared weights"
+requires-python = ">=3.12"
+dependencies = [
+  "numpy>=1.26",
+  "safetensors>=0.4",
+  "blake3>=0.4",
+]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]

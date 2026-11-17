@@ -1,0 +1,97 @@
+diff --git a/miner/miner-base/src/miner_base/async_loop_manager.py b/miner/miner-base/src/miner_base/async_loop_manager.py
+--- a/miner/miner-base/src/miner_base/async_loop_manager.py
++++ b/miner/miner-base/src/miner_base/async_loop_manager.py
+@@ -40,6 +40,11 @@
+     callback: Callable[[], None]
+ 
+ 
++def _current_gpu_uuid() -> str:
++    """UUID of the current CUDA device, in the form nvidia-smi prints: GPU-<uuid>."""
++    return f"GPU-{torch.cuda.get_device_properties(torch.cuda.current_device()).uuid}"
++
++
+ def _make_client(miner_settings: MinerSettings, config: MinerRpcConfig) -> MiningClient:
+     if miner_settings.no_gateway:
+         return DummyMiningClient()
+@@ -72,6 +77,10 @@
+         # Counter for submitted blocks
+         self.blocks_submitted = 0
+ 
++        # GPU UUID sent in getMiningInfo when `send_gpu_id` is set. Unknown until
++        # the first call to get_mining_job(); see there.
++        self._gpu_id: str | None = None
++
+         # Tracks CUDA events that have been scheduled but not yet fully processed
+         # (i.e. the callback hasn't fired yet). Used by wait_until_done_submitting_blocks
+         # to avoid returning before in-flight events have a chance to call handle_submit_block.
+@@ -112,6 +121,16 @@
+             self._client = None
+ 
+     def get_mining_job(self) -> MiningJob:
++        if self._conf.send_gpu_id and self._gpu_id is None:
++            # Read the UUID here, on the GEMM's thread, not in start(): start()
++            # runs when vLLM loads this plugin, which can be before the worker
++            # sets its device, and the current CUDA device is per thread, so the
++            # update thread would see device 0. The GEMM code already assumes the
++            # current device is the one its tensors are on. The next update,
++            # within a second, fetches this GPU's own job. Until then, the GEMMs
++            # use the shared job.
++            self._gpu_id = _current_gpu_uuid()
++            _LOGGER.info(f"Sending GPU ID {self._gpu_id} in getMiningInfo")
+         return self._mining_job  # Simple read is atomic for Python objects
+ 
+     def done_submitting_blocks(self) -> bool:
+@@ -208,7 +227,7 @@
+                 _LOGGER.exception("Failed to reap async results.")
+ 
+             try:
+-                new_mining_job = await asyncio.to_thread(self._client.get_mining_info)
++                new_mining_job = await asyncio.to_thread(self._client.get_mining_info, self._gpu_id)
+                 if new_mining_job != self._mining_job:
+                     if self._conf.print_header_hash:
+                         _LOGGER.info(
+diff --git a/miner/miner-base/src/miner_base/gateway_client.py b/miner/miner-base/src/miner_base/gateway_client.py
+--- a/miner/miner-base/src/miner_base/gateway_client.py
++++ b/miner/miner-base/src/miner_base/gateway_client.py
+@@ -20,12 +20,16 @@
+     def __init__(self, miner_rpc_config: MinerRpcConfig) -> None:
+         self.client = JSONRPCClient(miner_rpc_config)
+ 
+-    def get_mining_info(self) -> MiningJob:
++    def get_mining_info(self, gpu_id: str | None = None) -> MiningJob:
+         """
+         Send a getMiningInfo request to the Pearl Gateway.
+         Returns a MiningJob object containing the mining information.
++
++        If gpu_id is given, send it as {"gpu_id": ...} so the gateway can issue
++        this GPU its own job. Without it, the request carries no params.
+         """
+-        result = self.client.call("getMiningInfo")
++        params = {"gpu_id": gpu_id} if gpu_id is not None else None
++        result = self.client.call("getMiningInfo", params)
+         return MiningJob.from_dict(result)
+ 
+     def submit_plain_proof(self, plain_proof: PlainProof, mining_job: MiningJob) -> None:
+@@ -67,5 +71,5 @@
+     def __init__(self) -> None:
+         self.client = DummyRPCClient()
+ 
+-    def get_mining_info(self) -> MiningJob:
++    def get_mining_info(self, gpu_id: str | None = None) -> MiningJob:
+         return MiningJob(b"\xde\xad\xba\xbe" * 8, 1, cert_version=CertificateVersion.ZK_MOE)
+diff --git a/miner/miner-base/src/miner_base/settings.py b/miner/miner-base/src/miner_base/settings.py
+--- a/miner/miner-base/src/miner_base/settings.py
++++ b/miner/miner-base/src/miner_base/settings.py
+@@ -35,6 +35,12 @@
+     skip_block_submission: bool = False
+     no_vllm_plugin: bool = False
+ 
++    # Send this process's GPU UUID in getMiningInfo (env MINER_SEND_GPU_ID).
++    # Off by default. Only a gateway that accepts a gpu_id param can use it:
++    # the upstream gateway's schema rejects one. The UUID is what the driver
++    # reports, unsigned, so the gateway can't check it.
++    send_gpu_id: bool = False
++
+     enable_async_cuda_event_processing: bool = True
+ 
+     @field_validator("noise_rank")
